@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <!-- Debug builds only: drives the chat from adb, so the queue and the engine process can be
+             exercised end to end without the screens. -->
+        <receiver
+            android:name=".chat.DebugChatReceiver"
+            android:exported="true" />
+    </application>
+</manifest>
