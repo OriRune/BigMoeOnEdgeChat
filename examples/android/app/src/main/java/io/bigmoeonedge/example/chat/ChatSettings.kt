@@ -18,6 +18,8 @@ data class ChatSettings(
     val topK: Int = 40,
     val keepLoadedMinutes: Int = 30, // 0 = unload at once, -1 = never
     val pauseOnLowBattery: Boolean = true,
+    // Show the reply text on the lock screen, which is what makes reading and answering from it possible.
+    val lockScreenText: Boolean = true,
     val fakeEngine: Boolean = false, // debug builds only
 ) {
     /** [sync] writes to disk before returning, for a caller that kicks the engine process right after. */
@@ -27,6 +29,7 @@ data class ChatSettings(
             .putFloat("temperature", temperature).putFloat("topP", topP).putInt("topK", topK)
             .putInt("keepLoadedMinutes", keepLoadedMinutes)
             .putBoolean("pauseOnLowBattery", pauseOnLowBattery)
+            .putBoolean("lockScreenText", lockScreenText)
             .putBoolean("fakeEngine", fakeEngine)
         if (sync) e.commit() else e.apply()
     }
@@ -48,6 +51,7 @@ data class ChatSettings(
                 topK = p.getInt("topK", d.topK),
                 keepLoadedMinutes = p.getInt("keepLoadedMinutes", d.keepLoadedMinutes),
                 pauseOnLowBattery = p.getBoolean("pauseOnLowBattery", d.pauseOnLowBattery),
+                lockScreenText = p.getBoolean("lockScreenText", d.lockScreenText),
                 fakeEngine = p.getBoolean("fakeEngine", d.fakeEngine),
             )
         }

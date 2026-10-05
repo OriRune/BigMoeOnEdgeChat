@@ -86,6 +86,11 @@ fun ChatSettingsScreen(
                 "Pause on low battery", "Queued replies wait below 15% unless the phone is charging.",
                 current.pauseOnLowBattery,
             ) { onChange(current.copy(pauseOnLowBattery = it)) }
+            SwitchRow(
+                "Show replies on the lock screen",
+                "Lets you read a reply and answer it without unlocking. Off shows only \"New reply\".",
+                current.lockScreenText,
+            ) { onChange(current.copy(lockScreenText = it)) }
             if (BuildConfig.DEBUG) {
                 SwitchRow(
                     "Fake engine", "Debug builds only: answers with canned text, for the emulator.",

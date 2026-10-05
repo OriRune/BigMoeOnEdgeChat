@@ -1,6 +1,15 @@
 package io.bigmoeonedge.example.chat.ui
 
+import android.Manifest
 import android.app.NotificationManager
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.core.content.ContextCompat
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
@@ -113,6 +122,7 @@ private fun ChatRoot(openConversation: Long?, onOpened: () -> Unit, onLab: () ->
     val ctx = LocalContext.current
     val nav = rememberNavController()
     var chatSettings by remember { mutableStateOf(ChatSettings.load(ctx)) }
+    NotificationPrompt()
 
     LaunchedEffect(openConversation) {
         if (openConversation != null) {
@@ -173,4 +183,38 @@ private fun ChatRoot(openConversation: Long?, onOpened: () -> Unit, onLab: () ->
             )
         }
     }
+}
+
+/**
+ * Asks once, with a reason, for the permission replies need to reach the user while the app is
+ * closed. Without it the chat still works; the reply is just waiting when the app is opened.
+ */
+@Composable
+private fun NotificationPrompt() {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+    val ctx = LocalContext.current
+    val prefs = remember { ctx.getSharedPreferences("chat_ui", Context.MODE_PRIVATE) }
+    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    var ask by remember {
+        mutableStateOf(
+            !prefs.getBoolean("asked_notifications", false) &&
+                ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED,
+        )
+    }
+    if (!ask) return
+    AlertDialog(
+        onDismissRequest = { ask = false; prefs.edit().putBoolean("asked_notifications", true).apply() },
+        title = { Text("Get replies as notifications?") },
+        text = { Text("A reply can take minutes. With notifications on, it reaches you when the app is closed, and you can answer from the notification.") },
+        confirmButton = {
+            TextButton(onClick = {
+                ask = false
+                prefs.edit().putBoolean("asked_notifications", true).apply()
+                launcher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }) { Text("Allow") }
+        },
+        dismissButton = {
+            TextButton(onClick = { ask = false; prefs.edit().putBoolean("asked_notifications", true).apply() }) { Text("Not now") }
+        },
+    )
 }

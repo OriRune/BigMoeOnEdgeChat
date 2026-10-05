@@ -46,7 +46,7 @@ class EngineRunnerTest {
         override fun pauseReason(): String? = pause
         override fun thermalStatus() = 0
         override fun keepLoadedMinutes() = -1
-        override fun replyFinished(messageId: Long, conversationId: Long, status: String) {
+        override suspend fun replyFinished(messageId: Long, conversationId: Long, status: String) {
             finished += messageId
         }
 

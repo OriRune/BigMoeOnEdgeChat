@@ -55,7 +55,7 @@ interface EngineHost {
     fun keepLoadedMinutes(): Int
 
     /** A reply reached a final status. [status] is DONE, FAILED or CANCELLED. */
-    fun replyFinished(messageId: Long, conversationId: Long, status: String)
+    suspend fun replyFinished(messageId: Long, conversationId: Long, status: String)
 
     /** The queue drained; [modelLoaded] says whether a session is still open. */
     fun idle(modelLoaded: Boolean)

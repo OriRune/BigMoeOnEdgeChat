@@ -68,6 +68,23 @@ pauses the chat queue and frees the model (`EngineClient.suspend()`), and return
   when older messages no longer fit the context.
 - **Settings** (chat settings, with a button to the engine settings of the lab).
 
+## Notifications
+
+- **Reply**: when a reply finishes (or fails) and its thread is not on screen, the engine process
+  posts one messaging-style notification per conversation, updated in place, with the last few
+  messages, an inline **Reply** and **Mark read** (or **Retry** after a failure). Replying from the
+  notification queues the message and re-posts the notification as "Queued". Tapping opens the
+  thread. Opening a thread cancels its notification. Whether a thread is on screen comes from a
+  presence row the UI writes in onResume/onPause; a dead UI process counts as not looking.
+- **Model activity**: the ongoing notification of the `:engine` service shows what it is doing
+  ("Loading…", "Writing reply · 120 tok · 1.7 tok/s", "Model loaded · idle", "Paused — low
+  battery") with a Stop button, updated at most every 2 s.
+- **Lock screen**: the text of a reply shows on the lock screen (setting *Show replies on the lock
+  screen*, on by default). On a phone with a fingerprint or PIN, Android still asks you to
+  authenticate before the reply box opens; the app cannot waive that.
+- The permission is asked once, with a reason, the first time the app opens. Without it the chat
+  works and the reply is waiting when you open the app.
+
 ## Queue semantics
 
 - Sending is never blocked. A message always lands in the conversation; if the conversation already

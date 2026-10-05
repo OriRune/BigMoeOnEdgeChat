@@ -26,6 +26,14 @@ import io.bigmoeonedge.example.RunService
 import io.bigmoeonedge.example.chat.ChatSettings
 import io.bigmoeonedge.example.chat.data.ChatDb
 import io.bigmoeonedge.example.chat.data.ConversationEntity
+import io.bigmoeonedge.example.chat.data.ChatRepository
+import io.bigmoeonedge.example.chat.data.MessageStatus
+import io.bigmoeonedge.example.chat.notify.ReplyNotifier
+import io.bigmoeonedge.example.chat.notify.isThreadVisible
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import java.io.File
 
 /**
@@ -36,6 +44,9 @@ import java.io.File
  */
 class EngineService : Service(), EngineHost {
     private lateinit var runner: EngineRunner
+    private lateinit var notifier: ReplyNotifier
+    private lateinit var repo: ChatRepository
+    private val io = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val main = Handler(Looper.getMainLooper())
     private var wake: PowerManager.WakeLock? = null
     private var lastStartId = 0
@@ -60,7 +71,10 @@ class EngineService : Service(), EngineHost {
         ensureChannel()
         // A previous engine process may have died with its child still alive.
         ProcessEngineBackend.killOrphan(File(filesDir, "engine.pid"))
-        runner = EngineRunner(ChatDb.get(this), this)
+        val db = ChatDb.get(this)
+        notifier = ReplyNotifier(this, db).also { it.ensureChannel() }
+        runner = EngineRunner(db, this)
+        repo = ChatRepository(db, { runner.kick() })
         runner.start()
         registerReceiver(
             batteryKick,
@@ -79,11 +93,35 @@ class EngineService : Service(), EngineHost {
             ACTION_KICK -> runner.kick()
             ACTION_CANCEL -> runner.cancel(intent.getLongExtra(EXTRA_MESSAGE_ID, -1))
             ACTION_STOP_ACTIVE -> runner.cancelActive()
+            ACTION_REPLY -> {
+                val conv = intent.getLongExtra(EXTRA_CONVERSATION_ID, -1)
+                val text = ReplyNotifier.replyText(intent)?.toString()?.trim().orEmpty()
+                if (conv >= 0 && text.isNotEmpty()) {
+                    io.launch {
+                        repo.send(conv, text)
+                        // Without a new post the inline-reply spinner never stops.
+                        notifier.post(conv, queuedNote = true)
+                    }
+                }
+            }
+            ACTION_MARK_READ -> {
+                val conv = intent.getLongExtra(EXTRA_CONVERSATION_ID, -1)
+                notifier.cancel(conv)
+                io.launch { repo.markRead(conv) }
+            }
+            ACTION_RETRY -> {
+                val conv = intent.getLongExtra(EXTRA_CONVERSATION_ID, -1)
+                notifier.cancel(conv)
+                io.launch { repo.retry(intent.getLongExtra(EXTRA_MESSAGE_ID, -1)) }
+            }
             ACTION_UNLOAD -> runner.unload()
             ACTION_SUSPEND -> runner.suspend()
             ACTION_RESUME -> runner.resume()
-            else -> runner.kick()
+            else -> {}
         }
+        // Every start ends in a kick: with nothing queued the loop finds it idle and lets the
+        // service stop, which an action like Mark read would otherwise never do.
+        runner.kick()
         // Sticky: if the system kills this process mid-reply it brings the service back, and recovery
         // (onCreate) re-queues what was running.
         return START_STICKY
@@ -93,6 +131,7 @@ class EngineService : Service(), EngineHost {
         runCatching { unregisterReceiver(batteryKick) }
         main.removeCallbacksAndMessages(null)
         runner.shutdown()
+        io.coroutineContext[kotlinx.coroutines.Job]?.cancel()
         holdWake(false)
         super.onDestroy()
     }
@@ -199,8 +238,10 @@ class EngineService : Service(), EngineHost {
         return ChatSettings.load(this).keepLoadedMinutes
     }
 
-    override fun replyFinished(messageId: Long, conversationId: Long, status: String) {
-        // Reply notifications arrive with the notification work; nothing to do for the queue itself.
+    override suspend fun replyFinished(messageId: Long, conversationId: Long, status: String) {
+        if (status == MessageStatus.CANCELLED) return
+        val visible = ChatDb.get(this).presence().get()?.visibleConversationId
+        if (!isThreadVisible(this, visible, conversationId)) notifier.post(conversationId)
     }
 
     override fun idle(modelLoaded: Boolean) {
@@ -259,7 +300,11 @@ class EngineService : Service(), EngineHost {
         const val ACTION_UNLOAD = "io.bigmoeonedge.example.chat.UNLOAD"
         const val ACTION_SUSPEND = "io.bigmoeonedge.example.chat.SUSPEND"
         const val ACTION_RESUME = "io.bigmoeonedge.example.chat.RESUME"
+        const val ACTION_REPLY = "io.bigmoeonedge.example.chat.REPLY"
+        const val ACTION_MARK_READ = "io.bigmoeonedge.example.chat.MARK_READ"
+        const val ACTION_RETRY = "io.bigmoeonedge.example.chat.RETRY"
         const val EXTRA_MESSAGE_ID = "messageId"
+        const val EXTRA_CONVERSATION_ID = "conversationId"
 
         const val CHANNEL_ENGINE = "engine"
         const val NOTIF_ID = 1001
@@ -267,7 +312,7 @@ class EngineService : Service(), EngineHost {
         // A reply at 0.5 tok/s can run most of an hour; the upstream service's 30 minutes would cut it.
         private const val WAKE_MS = 60 * 60 * 1000L
         private const val WAKE_REFRESH_MS = 10 * 60 * 1000L
-        private const val NOTIF_MIN_GAP_MS = 1500L
+        private const val NOTIF_MIN_GAP_MS = 2000L
         private const val OTHER_ENGINE_WAIT_MS = 10_000L
         private const val LOW_BATTERY_PCT = 15
     }

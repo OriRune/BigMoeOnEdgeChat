@@ -4,6 +4,14 @@ Changes that exist only in this fork of [Helldez/BigMoeOnEdge](https://github.co
 Upstream's `CHANGELOG.md` is left alone so that merging `upstream/main` stays conflict-free; engine
 changes offered back upstream go there instead, per `AGENTS.md`.
 
+## [0.28.0-chat.4] - 2026-10-04
+
+### Added
+- Reply notifications (`chat/notify/`): a messaging-style notification per conversation with inline
+  Reply, Mark read and Retry, posted by the engine process when the thread is not on screen.
+- The engine service's notification shows live progress with a Stop button; the one-time
+  notification permission prompt with a reason; a *Show replies on the lock screen* setting.
+
 ## [0.28.0-chat.3] - 2026-10-04
 
 ### Added
