@@ -48,11 +48,11 @@ android {
     }
 
     defaultConfig {
-        applicationId 'io.bigmoeonedge.example'
+        applicationId 'io.github.orirune.bmoechat'
         minSdk 29
         targetSdk 34
-        versionCode 43
-        versionName '0.28.0'
+        versionCode 44
+        versionName '0.28.0-chat.1'
         buildConfigField 'String', 'GIT_SHA', "\"${gitSha}\""
         ndk {
             // The engine ships as prebuilt arm64 binaries staged by build-android.ps1.

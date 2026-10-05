@@ -6,6 +6,12 @@ The engine binaries are **not** committed. Build and stage them with:
 pwsh scripts/build-android.ps1
 ```
 
+or, on Linux/macOS:
+
+```bash
+scripts/build-android.sh
+```
+
 That cross-compiles `bmoe-cli` and copies it here as `libbmoe-cli.so` alongside the
 `libllama.so` / `libggml*.so` it links. Android only extracts and lets an app execute
 files named `lib*.so` from its `nativeLibraryDir`, which is why the CLI is shipped

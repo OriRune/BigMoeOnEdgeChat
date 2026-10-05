@@ -16,6 +16,9 @@ research harness and keeps the app a thin driver over the CLI.
    pwsh ../../scripts/build-android.ps1
    ```
 
+   On Linux or macOS, `../../scripts/build-android.sh` does the same with the same flags (it finds the
+   NDK through `ANDROID_NDK_HOME`, else the newest one under `~/Android/Sdk/ndk`).
+
    This fills `app/src/main/jniLibs/arm64-v8a/` with `libbmoe-cli.so` and the
    `libllama`/`libggml` shared libraries.
 
@@ -50,6 +53,8 @@ research harness and keeps the app a thin driver over the CLI.
    to debug signing. The APKs attached to a GitHub release are built by the `release-apk`
    workflow from a clean checkout of the tag when the release is published, signed with the same
    stable key from repository secrets — no locally built artifact is uploaded by hand.
+
+Fork notes (chat screens, application id, scan) live in [CHAT.md](CHAT.md).
 
 ## Flavors
 
