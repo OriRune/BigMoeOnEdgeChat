@@ -47,6 +47,27 @@ UI process (main)                          :engine process
   the chat uses `--cache-mb 500 --force-cache` and `-c 2048` unless you set a context yourself
   (`EngineConfig`). Smaller models keep the lab's engine settings.
 
+## Screens
+
+`ChatActivity` is the launcher; the original single screen is kept as the **Engine lab** (menu →
+Engine lab) with every engine setting, the metrics and the model downloader. Opening the lab
+pauses the chat queue and frees the model (`EngineClient.suspend()`), and returning resumes it.
+
+- **Chats**: title, last message, relative time, model, a status chip (Queued, Writing…, Failed)
+  and an unread dot. A banner shows what the engine is doing (loading, writing, paused, error with
+  Retry). Long-press a row to rename or delete; the magnifier searches titles and message text.
+- **New chat**: pick a model (the last one used is preselected), an optional system prompt and the
+  thinking switch. The title is the first 40 characters of the first message until renamed.
+- **Thread**: bubbles with the newest at the bottom. A reply that is still being written is plain
+  text and becomes Markdown when it is done (re-parsing Markdown per update is what froze the lab
+  screen). Reasoning is a collapsible block. States: *Queued · N ahead*, *Reading the conversation…*
+  (or the loading text while the model loads), *Writing · x tok/s* with Stop, *Failed* with Retry.
+  Long-press a bubble: Copy, Delete, Regenerate (last reply), Edit & resend (last message of
+  yours). The composer is never disabled: sending while a reply is writing queues it. *Attach*
+  inserts a text file (up to 64 KB) into the box. A divider marks where the model's memory begins
+  when older messages no longer fit the context.
+- **Settings** (chat settings, with a button to the engine settings of the lab).
+
 ## Queue semantics
 
 - Sending is never blocked. A message always lands in the conversation; if the conversation already

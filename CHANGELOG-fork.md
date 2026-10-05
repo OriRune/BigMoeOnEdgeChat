@@ -4,6 +4,18 @@ Changes that exist only in this fork of [Helldez/BigMoeOnEdge](https://github.co
 Upstream's `CHANGELOG.md` is left alone so that merging `upstream/main` stays conflict-free; engine
 changes offered back upstream go there instead, per `AGENTS.md`.
 
+## [0.28.0-chat.3] - 2026-10-04
+
+### Added
+- Chat screens (`chat/ui/`): conversation list with search, new chat, thread with queueing,
+  streaming, Stop, Retry, Regenerate, Edit & resend, text-file attachment, and chat settings.
+  The launcher is now `ChatActivity`; the previous screen is the **Engine lab**, reached from the
+  menu, which pauses the chat queue while it is open.
+
+### Changed
+- `AndroidManifest.xml`: `ChatActivity` takes the launcher intent filter; `MainActivity` is labelled
+  "Engine lab" and no longer a launcher.
+
 ## [0.28.0-chat.2] - 2026-10-04
 
 ### Added

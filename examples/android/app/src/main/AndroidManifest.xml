@@ -39,15 +39,25 @@
              devices without it, and the NPU prefill then fails to find its device. -->
         <uses-native-library android:name="libcdsprpc.so" android:required="false" />
 
+        <!-- The front door: saved chats. A reply notification opens it with a conversationId extra. -->
         <activity
-            android:name=".MainActivity"
+            android:name=".chat.ui.ChatActivity"
             android:exported="true"
+            android:launchMode="singleTask"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- The original single-screen app, kept as the engine lab: every engine setting, the metrics
+             and the model downloader. Opened from the chat's menu. -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:label="Engine lab"
+            android:windowSoftInputMode="adjustResize" />
 
         <service
             android:name=".RunService"
