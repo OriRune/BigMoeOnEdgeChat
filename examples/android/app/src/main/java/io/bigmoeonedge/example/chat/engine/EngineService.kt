@@ -34,6 +34,14 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import io.bigmoeonedge.example.chat.data.ScanRunEntity
+import io.bigmoeonedge.example.chat.data.ScanRunStatus
+import io.bigmoeonedge.example.scan.AndroidSampler
+import io.bigmoeonedge.example.scan.DeviceSampler
+import io.bigmoeonedge.example.scan.FakeSampler
+import io.bigmoeonedge.example.scan.FakeThermal
+import io.bigmoeonedge.example.scan.ScanTiming
+import io.bigmoeonedge.example.scan.SettingsJson
 import java.io.File
 
 /**
@@ -114,6 +122,7 @@ class EngineService : Service(), EngineHost {
                 notifier.cancel(conv)
                 io.launch { repo.retry(intent.getLongExtra(EXTRA_MESSAGE_ID, -1)) }
             }
+            ACTION_SCAN_STOP -> runner.stopScan()
             ACTION_UNLOAD -> runner.unload()
             ACTION_SUSPEND -> runner.suspend()
             ACTION_RESUME -> runner.resume()
@@ -144,7 +153,10 @@ class EngineService : Service(), EngineHost {
         val chat = ChatSettings.load(this)
         val base = AppSettings.load(this)
         val model = File(conv.modelPath)
-        val s = EngineConfig.resolve(base, chat, model.length())
+        // A profile saved from a scan replaces the global engine settings for this model.
+        val profile = ChatDb.get(this).scan().profile(conv.modelPath)
+            ?.let { runCatching { SettingsJson.fromJson(it.settingsJson) }.getOrNull() }
+        val s = EngineConfig.resolve(base, chat, model.length(), override = profile)
         val cli = ModelManager.cliPath(this)
         val argv = EngineConfig.argv(s, chat, cli, conv.modelPath)
         val native = applicationInfo.nativeLibraryDir
@@ -167,6 +179,89 @@ class EngineService : Service(), EngineHost {
             fake = fake,
             modelName = model.nameWithoutExtension.take(40),
         )
+    }
+
+    // ── the scan ──
+
+    override fun isFake(): Boolean {
+        ChatSettings.refreshFromDisk(this)
+        return BuildConfig.DEBUG && ChatSettings.load(this).fakeEngine
+    }
+
+    private fun fastFake(): Boolean = isFake() && ChatSettings.load(this).fakeFast
+
+    override fun scanTiming(): ScanTiming {
+        if (!fastFake()) return ScanTiming()
+        FakeThermal.timeScale = 40.0
+        FakeThermal.speedScale = 40.0
+        return ScanTiming(
+            refIdleMs = 2_000, refExtendMs = 4_000, sampleMs = 200, gatePollMs = 300, gateMaxMs = 15_000, sustainedMs = 6_000,
+        )
+    }
+
+    override fun deviceSampler(): DeviceSampler = if (isFake()) FakeSampler() else AndroidSampler(this)
+
+    override suspend fun scanCurrentSettings(modelPath: String): AppSettings {
+        ChatSettings.refreshFromDisk(this)
+        return EngineConfig.resolve(AppSettings.load(this), ChatSettings.load(this), File(modelPath).length())
+    }
+
+    override fun scanJobConfig(modelPath: String, settings: AppSettings, csv: File?): JobConfig {
+        val chat = ChatSettings.load(this)
+        val argv = settings.sessionArgv(ModelManager.cliPath(this), modelPath, csv?.absolutePath)
+        val native = applicationInfo.nativeLibraryDir
+        val env = HashMap<String, String>()
+        env["LD_LIBRARY_PATH"] = "$native:/system/lib64:/vendor/lib64"
+        env["ADSP_LIBRARY_PATH"] = native
+        if (argv.contains("--prefill-device")) {
+            env["GGML_HEXAGON_OPPOLL"] = "1"
+            env["GGML_HEXAGON_HOSTBUF"] = "1"
+        }
+        val model = File(modelPath)
+        return JobConfig(
+            argv, (if (isFake()) "fake|" else "") + settings.sessionSignature(modelPath), env, model.parentFile,
+            settings.nPredict, settings.sessionCtx, BuildConfig.DEBUG && chat.fakeEngine, model.nameWithoutExtension.take(40),
+        )
+    }
+
+    override fun scanCsv(runId: Long, cellId: Long): File? =
+        File(filesDir, "scan/$runId").apply { mkdirs() }.let { File(it, "$cellId.csv") }
+
+    override fun scanPrompt(): String = assets.open("scan_prompt.txt").bufferedReader().use { it.readText() }
+
+    override fun ramBytes(): Long {
+        val mi = android.app.ActivityManager.MemoryInfo()
+        (getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager).getMemoryInfo(mi)
+        return mi.totalMem
+    }
+
+    override fun cpusetOf(pid: Int): Pair<String, Int> {
+        if (pid <= 0) return "" to 0
+        val cpuset = runCatching {
+            File("/proc/$pid/cgroup").readLines().firstOrNull { ":cpuset:" in it }?.substringAfter(":cpuset:") ?: ""
+        }.getOrDefault("")
+        val list = runCatching {
+            File("/proc/$pid/status").readLines().first { it.startsWith("Cpus_allowed_list:") }.substringAfter(":").trim()
+        }.getOrDefault("")
+        // "0-5" or "0-3,6" -> a count.
+        val n = list.split(',').filter { it.isNotBlank() }.sumOf { part ->
+            val ab = part.trim().split('-')
+            if (ab.size == 2) (ab[1].toIntOrNull() ?: 0) - (ab[0].toIntOrNull() ?: 0) + 1 else 1
+        }
+        return cpuset to n
+    }
+
+    override fun scanPauseReason(): String? {
+        val b = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED)) ?: return null
+        val level = b.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
+        val scale = b.getIntExtra(BatteryManager.EXTRA_SCALE, 100)
+        val plugged = b.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) != 0
+        val pct = if (level >= 0 && scale > 0) level * 100 / scale else 100
+        return if (pct < SCAN_LOW_BATTERY_PCT && !plugged) "paused, low battery" else null
+    }
+
+    override fun scanFinished(run: ScanRunEntity) {
+        notifier.postScanFinished(run)
     }
 
     override fun createBackend(cfg: JobConfig): EngineBackend =
@@ -311,6 +406,8 @@ class EngineService : Service(), EngineHost {
         const val ACTION_RESUME = "io.bigmoeonedge.example.chat.RESUME"
         const val ACTION_REPLY = "io.bigmoeonedge.example.chat.REPLY"
         const val ACTION_MARK_READ = "io.bigmoeonedge.example.chat.MARK_READ"
+        const val ACTION_SCAN_START = "io.bigmoeonedge.example.chat.SCAN_START"
+        const val ACTION_SCAN_STOP = "io.bigmoeonedge.example.chat.SCAN_STOP"
         const val ACTION_RETRY = "io.bigmoeonedge.example.chat.RETRY"
         const val EXTRA_MESSAGE_ID = "messageId"
         const val EXTRA_CONVERSATION_ID = "conversationId"
@@ -324,5 +421,6 @@ class EngineService : Service(), EngineHost {
         private const val NOTIF_MIN_GAP_MS = 2000L
         private const val OTHER_ENGINE_WAIT_MS = 10_000L
         private const val LOW_BATTERY_PCT = 15
+        private const val SCAN_LOW_BATTERY_PCT = 20
     }
 }

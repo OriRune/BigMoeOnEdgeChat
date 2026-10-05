@@ -57,6 +57,39 @@ interface EngineHost {
     /** Anonymous memory (RAM + swap) the engine child holds, in MiB, or -1 when it cannot be read. */
     fun childMemoryMb(pid: Int): Int = -1
 
+    // ── the scan (settings search); defaults keep chat-only stubs small ──
+
+    /** Whether the fake engine is selected (debug builds only). */
+    fun isFake(): Boolean = false
+
+    /** The device readings for the scan: the real phone, or the simulated one with the fake engine. */
+    fun deviceSampler(): io.bigmoeonedge.example.scan.DeviceSampler = io.bigmoeonedge.example.scan.FakeSampler()
+
+    /** The settings a chat would use for [modelPath] today, ignoring any saved profile. */
+    suspend fun scanCurrentSettings(modelPath: String): io.bigmoeonedge.example.AppSettings =
+        io.bigmoeonedge.example.AppSettings()
+
+    /** How to open a session for [settings]; [csv] is where the engine writes its per-token CSV. */
+    fun scanJobConfig(modelPath: String, settings: io.bigmoeonedge.example.AppSettings, csv: File?): JobConfig =
+        JobConfig(listOf("fake"), "sig", emptyMap(), null, 128, settings.sessionCtx, true, "fake")
+
+    /** Where a scan cell's per-token CSV goes, or null. */
+    fun scanCsv(runId: Long, cellId: Long): File? = null
+
+    fun scanTiming(): io.bigmoeonedge.example.scan.ScanTiming = io.bigmoeonedge.example.scan.ScanTiming()
+
+    fun scanPrompt(): String = "Continue the story:"
+    fun ramBytes(): Long = 12L shl 30
+
+    /** The cpuset name and the number of cores the child may run on. */
+    fun cpusetOf(pid: Int): Pair<String, Int> = "" to 0
+
+    /** A scan reached a final state: notify the user. */
+    fun scanFinished(run: io.bigmoeonedge.example.chat.data.ScanRunEntity) {}
+
+    /** Low battery pause for the scan (stricter than the chat's): below 20% and not charging. */
+    fun scanPauseReason(): String? = null
+
     /** A reply reached a final status. [status] is DONE, FAILED or CANCELLED. */
     suspend fun replyFinished(messageId: Long, conversationId: Long, status: String)
 
@@ -78,24 +111,14 @@ class EngineRunner(
     private val scope = CoroutineScope(executor.asCoroutineDispatcher() + SupervisorJob())
     private val kicks = Channel<Unit>(Channel.CONFLATED)
 
-    private sealed interface Ev {
-        data class Line(val text: String) : Ev
-        data class Exit(val code: Int) : Ev
-    }
-
-    private class Live(val backend: EngineBackend, val sig: String, val modelPath: String) {
-        val events = Channel<Ev>(Channel.UNLIMITED)
-        val protocol = EngineProtocol()
-        val stderrTail = StringBuilder()
-        @Volatile var ioMode: String = ""
-        var nextId = 1
-    }
-
-    private class SessionFailed(msg: String) : Exception(msg)
-
-    private var live: Live? = null
+    private var live: EngineSession? = null
     private var idleJob: Job? = null
     private var retryJob: Job? = null
+
+    private val scanExecutor = io.bigmoeonedge.example.scan.ScanExecutor(
+        db, host, host.scanTiming(), clock,
+    ) { st, detail -> status(st, detail) }
+    @Volatile private var scanning = false
 
     @Volatile private var suspended = false
     @Volatile private var activeId = -1L
@@ -130,8 +153,14 @@ class EngineRunner(
         }
     }
 
-    /** Stop whatever reply is running (the notification's Stop button). */
+    /** Stop a running scan; its finished cells are kept and it can be resumed. */
+    fun stopScan() {
+        scanExecutor.stop()
+    }
+
+    /** Stop whatever reply or scan is running (the notification's Stop button). */
     fun cancelActive() {
+        if (scanning) return stopScan()
         val id = activeId
         if (id >= 0) cancel(id)
     }
@@ -144,6 +173,7 @@ class EngineRunner(
     /** The lab screen wants the engine: give the memory back and hold the queue until [resume]. */
     fun suspend() {
         suspended = true
+        if (scanning) stopScan()
         if (activeId >= 0) {
             requeueActive = true
             live?.backend?.send(EngineProtocol.CANCEL)
@@ -175,6 +205,23 @@ class EngineRunner(
         retryJob?.cancel()
         var ran = false
         while (true) {
+            val scanRun = if (suspended) null else db.scan().runningRun()
+            if (scanRun != null) {
+                // One engine owner: the chat queue waits (messages still queue) while a scan runs.
+                teardown()
+                host.holdWake(true)
+                ran = true
+                scanning = true
+                try {
+                    scanExecutor.run(scanRun)
+                } finally {
+                    scanning = false
+                }
+                // A run that returned still marked RUNNING would loop here forever.
+                db.scan().run(scanRun.id)?.takeIf { it.status == io.bigmoeonedge.example.chat.data.ScanRunStatus.RUNNING }
+                    ?.let { db.scan().updateRun(it.copy(status = io.bigmoeonedge.example.chat.data.ScanRunStatus.FAILED, verdict = "The scan ended unexpectedly.")) }
+                continue
+            }
             if (suspended) {
                 teardown()
                 status(EngineStateName.IDLE, "", paused = "Engine lab is open")
@@ -297,21 +344,22 @@ class EngineRunner(
         host.replyFinished(m.id, conv.id, MessageStatus.FAILED)
     }
 
-    private suspend fun stream(l: Live, m: MessageEntity, conv: ConversationEntity, cfg: JobConfig, job: JobHistory) {
+    private suspend fun stream(l: EngineSession, m: MessageEntity, conv: ConversationEntity, cfg: JobConfig, job: JobHistory) {
         val msgs = db.messages()
         var lastFlush = 0L
         var firstTokenAt = 0L
         var deleted = false
         while (true) {
             when (val ev = l.events.receive()) {
-                is Ev.Exit -> {
+                is EngineSession.Ev.Exit -> {
                     live = null
-                    val tail = synchronized(l.stderrTail) { l.stderrTail.takeLast(600).toString().trim() }
+                    l.exited = true
+                    val tail = l.tail()
                     throw SessionFailed(
                         "The engine stopped unexpectedly (exit ${ev.code})." + if (tail.isEmpty()) "" else "\n$tail",
                     )
                 }
-                is Ev.Line -> when (val p = l.protocol.parse(ev.text)) {
+                is EngineSession.Ev.Line -> when (val p = l.protocol.parse(ev.text)) {
                     is EngineEvent.Progress -> {
                         val now = clock()
                         if (firstTokenAt == 0L) {
@@ -373,7 +421,7 @@ class EngineRunner(
 
     // ── session lifecycle ──
 
-    private suspend fun ensureSession(cfg: JobConfig, modelPath: String, m: MessageEntity): Live {
+    private suspend fun ensureSession(cfg: JobConfig, modelPath: String, m: MessageEntity): EngineSession {
         val cur = live
         if (cur != null && cur.sig == cfg.sig && cur.backend.isAlive) return cur
         if (cur != null) teardown()
@@ -381,72 +429,24 @@ class EngineRunner(
         host.foregroundText("Loading ${cfg.modelName}…")
         if (!cfg.fake) withContext(Dispatchers.IO) { host.clearOtherEngines(-1) }
 
-        val backend = host.createBackend(cfg)
-        val l = Live(backend, cfg.sig, modelPath)
+        val l = EngineSession(host.createBackend(cfg), cfg.sig, modelPath)
         live = l
-        backend.start(
-            cfg.argv, cfg.env, cfg.workDir,
-            object : EngineBackend.Listener {
-                override fun onLine(line: String) {
-                    l.events.trySend(Ev.Line(line))
-                }
-
-                override fun onStderr(line: String) {
-                    synchronized(l.stderrTail) { if (l.stderrTail.length < 4000) l.stderrTail.append(line).append('\n') }
-                    sniffIoMode(l, line)
-                }
-
-                override fun onExit(code: Int) {
-                    l.events.trySend(Ev.Exit(code))
-                }
-            },
-        )
-        while (true) {
-            when (val ev = l.events.receive()) {
-                is Ev.Exit -> {
-                    live = null
-                    val tail = synchronized(l.stderrTail) { l.stderrTail.takeLast(600).toString().trim() }
-                    throw SessionFailed(
-                        "The model did not load (exit ${ev.code})." + if (tail.isEmpty()) "" else "\n$tail",
-                    )
-                }
-                is Ev.Line -> when (val p = l.protocol.parse(ev.text)) {
-                    is EngineEvent.Ready -> {
-                        status(EngineStateName.READY, "", ioMode = l.ioMode)
-                        return l
-                    }
-                    is EngineEvent.Error -> if (p.fatal) throw SessionFailed(p.msg)
-                    else -> {}
-                }
-            }
+        l.start(cfg)
+        try {
+            l.awaitReady()
+        } catch (e: SessionFailed) {
+            live = null
+            throw e
         }
+        status(EngineStateName.READY, "", ioMode = l.ioMode)
+        return l
     }
 
-    private fun sniffIoMode(l: Live, line: String) {
-        when {
-            "O_DIRECT returns wrong data" in line -> l.ioMode = "buffered (O_DIRECT unsupported on this storage)"
-            "expert streaming ON" in line && l.ioMode.isEmpty() ->
-                Regex("""o_direct=(\d)""").find(line)?.groupValues?.get(1)?.let {
-                    l.ioMode = if (it == "1") "direct (O_DIRECT)" else "buffered"
-                }
-        }
-    }
-
-    /** Ask the session to close, wait for the process to be reaped, force it if it will not go. */
+    /** Close the chat session and wait for its process to go. */
     private suspend fun teardown() {
         val l = live ?: return
         live = null
-        l.backend.close()
-        val gone = withTimeoutOrNull(EXIT_GRACE_MS) {
-            while (true) if (l.events.receive() is Ev.Exit) break
-            true
-        }
-        if (gone == null) {
-            l.backend.kill()
-            withTimeoutOrNull(EXIT_FORCE_MS) {
-                while (true) if (l.events.receive() is Ev.Exit) break
-            }
-        }
+        l.close(EXIT_GRACE_MS, EXIT_FORCE_MS)
     }
 
     // ── status row ──

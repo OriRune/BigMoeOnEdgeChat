@@ -21,6 +21,7 @@ data class ChatSettings(
     // Show the reply text on the lock screen, which is what makes reading and answering from it possible.
     val lockScreenText: Boolean = true,
     val fakeEngine: Boolean = false, // debug builds only
+    val fakeFast: Boolean = false, // debug builds only: the fake phone runs 40x faster, so a scan takes seconds
 ) {
     /** [sync] writes to disk before returning, for a caller that kicks the engine process right after. */
     fun save(ctx: Context, sync: Boolean = false) {
@@ -31,6 +32,7 @@ data class ChatSettings(
             .putBoolean("pauseOnLowBattery", pauseOnLowBattery)
             .putBoolean("lockScreenText", lockScreenText)
             .putBoolean("fakeEngine", fakeEngine)
+            .putBoolean("fakeFast", fakeFast)
         if (sync) e.commit() else e.apply()
     }
 
@@ -53,6 +55,7 @@ data class ChatSettings(
                 pauseOnLowBattery = p.getBoolean("pauseOnLowBattery", d.pauseOnLowBattery),
                 lockScreenText = p.getBoolean("lockScreenText", d.lockScreenText),
                 fakeEngine = p.getBoolean("fakeEngine", d.fakeEngine),
+                fakeFast = p.getBoolean("fakeFast", d.fakeFast),
             )
         }
 

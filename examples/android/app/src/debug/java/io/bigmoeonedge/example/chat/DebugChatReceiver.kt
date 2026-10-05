@@ -37,9 +37,7 @@ class DebugChatReceiver : BroadcastReceiver() {
         val repo = ChatServices.repository(ctx)
         when (intent.action) {
             "SEND" -> {
-                if (intent.hasExtra("fake")) {
-                    ChatSettings.load(ctx).copy(fakeEngine = intent.getBooleanExtra("fake", false)).save(ctx, sync = true)
-                }
+                applyFake(ctx, intent)
                 var conv = intent.getLongExtra("conv", -1)
                 if (conv < 0) {
                     val model = intent.getStringExtra("model") ?: "/data/local/tmp/fake.gguf"
@@ -62,6 +60,39 @@ class DebugChatReceiver : BroadcastReceiver() {
                 }
             }
             "UNLOAD" -> ChatServices.client(ctx).unload()
+            "SCAN" -> {
+                applyFake(ctx, intent)
+                val model = intent.getStringExtra("model") ?: "/data/local/tmp/bmoe/FakeMoE-Q4_0.gguf"
+                ChatServices.scan(ctx).start(
+                    listOf(model), intent.getBooleanExtra("sustained", true), intent.getBooleanExtra("lossy", false),
+                    intent.getIntExtra("minutes", 12),
+                )
+                Log.i(TAG, "scan started")
+            }
+            "SCAN_STOP" -> {
+                ChatServices.scan(ctx).stopAll()
+                ChatServices.client(ctx).scanStop()
+            }
+            "SCAN_DUMP" -> {
+                val db = ChatServices.db(ctx)
+                for (r in db.scan().observeRuns().first()) {
+                    Log.i(TAG, "run=${r.id} ${r.status} rec='${r.recommendedLabel}' conf=${r.confirmed} detail='${r.detail}' verdict='${r.verdict}'")
+                    for (c in db.scan().cells(r.id)) {
+                        Log.i(TAG, "  cell=${c.id} ${c.stage} '${c.label}' a${c.attempt} ${c.status} dec=${"%.2f".format(c.decodeMedianTokS)} " +
+                            "sus=${"%.2f".format(c.sustainedTokS)} hot=${"%.2f".format(c.throttledFrac)} gate=${"%.1f".format(c.gateWaitS)}")
+                    }
+                }
+            }
+        }
+    }
+
+    private fun applyFake(ctx: Context, intent: Intent) {
+        if (intent.hasExtra("fake") || intent.hasExtra("fast")) {
+            val cur = ChatSettings.load(ctx)
+            cur.copy(
+                fakeEngine = if (intent.hasExtra("fake")) intent.getBooleanExtra("fake", false) else cur.fakeEngine,
+                fakeFast = if (intent.hasExtra("fast")) intent.getBooleanExtra("fast", false) else cur.fakeFast,
+            ).save(ctx, sync = true)
         }
     }
 

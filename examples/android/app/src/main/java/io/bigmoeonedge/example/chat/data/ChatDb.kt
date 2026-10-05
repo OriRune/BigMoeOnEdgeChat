@@ -4,6 +4,8 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [
@@ -11,8 +13,11 @@ import androidx.room.RoomDatabase
         MessageEntity::class,
         EngineStatusEntity::class,
         UiPresenceEntity::class,
+        ScanRunEntity::class,
+        ScanCellEntity::class,
+        ModelProfileEntity::class,
     ],
-    version = 1,
+    version = 2,
     exportSchema = true,
 )
 abstract class ChatDb : RoomDatabase() {
@@ -20,6 +25,7 @@ abstract class ChatDb : RoomDatabase() {
     abstract fun messages(): MessageDao
     abstract fun engineStatus(): EngineStatusDao
     abstract fun presence(): PresenceDao
+    abstract fun scan(): ScanDao
 
     companion object {
         @Volatile private var instance: ChatDb? = null
@@ -31,6 +37,7 @@ abstract class ChatDb : RoomDatabase() {
          */
         fun get(ctx: Context): ChatDb = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(ctx.applicationContext, ChatDb::class.java, "chat.db")
+                .addMigrations(MIGRATION_1_2)
                 .enableMultiInstanceInvalidation()
                 .build()
                 .also { instance = it }

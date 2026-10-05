@@ -96,6 +96,10 @@ fun ChatSettingsScreen(
                     "Fake engine", "Debug builds only: answers with canned text, for the emulator.",
                     current.fakeEngine,
                 ) { onChange(current.copy(fakeEngine = it)) }
+                SwitchRow(
+                    "Fast fake time", "Debug builds only: the fake phone and engine run 40x faster, so a scan takes seconds.",
+                    current.fakeFast,
+                ) { onChange(current.copy(fakeFast = it)) }
             }
             OutlinedButton(onClick = onEngineSettings, modifier = Modifier.fillMaxWidth()) { Text("Engine settings") }
         }

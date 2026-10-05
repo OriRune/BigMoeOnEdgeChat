@@ -20,6 +20,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -70,6 +73,20 @@ class ThreadViewModel(private val app: Application, val conversationId: Long) : 
         val f = java.io.File(dir, MarkdownExport.fileName(conv.title))
         f.writeText(MarkdownExport.render(conv, msgs))
         FileProvider.getUriForFile(app, "${app.packageName}.fileprovider", f) to conv.title
+    }
+
+    /** True while chats with this conversation's model use a saved scan profile. */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    val hasProfile: StateFlow<Boolean> = repo.observeConversation(conversationId)
+        .flatMapLatest { c ->
+            if (c == null) kotlinx.coroutines.flow.flowOf(false)
+            else ChatServices.scan(app).observeProfile(c.modelPath).map { it != null }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    fun resetProfile() {
+        val c = ui.value.conversation ?: return
+        viewModelScope.launch { ChatServices.scan(app).resetProfile(c.modelPath) }
     }
 
     fun send(text: String) {

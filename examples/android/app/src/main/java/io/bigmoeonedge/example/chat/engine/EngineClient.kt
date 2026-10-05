@@ -15,6 +15,11 @@ class EngineClient(private val ctx: Context) : EngineKicker {
 
     fun cancel(messageId: Long) = send(EngineService.ACTION_CANCEL) { putExtra(EngineService.EXTRA_MESSAGE_ID, messageId) }
 
+    /** A scan run was queued or resumed in the database: start working on it. */
+    fun scanStart() = send(EngineService.ACTION_SCAN_START)
+
+    fun scanStop() = send(EngineService.ACTION_SCAN_STOP)
+
     fun unload() = send(EngineService.ACTION_UNLOAD)
 
     /** The lab screen is about to need the engine's memory. */

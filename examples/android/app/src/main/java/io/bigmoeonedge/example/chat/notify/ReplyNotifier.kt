@@ -78,6 +78,28 @@ class ReplyNotifier(private val ctx: Context, private val db: ChatDb) {
         runCatching { nm.notify(conversationId.toInt(), b.build()) }
     }
 
+    /** One notification when a scan ends, on the reply channel so it is heard. */
+    fun postScanFinished(run: io.bigmoeonedge.example.chat.data.ScanRunEntity) {
+        if (!nm.areNotificationsEnabled()) return
+        ensureChannel()
+        val model = ChatFormat.modelShortName(run.modelPath)
+        val (title, text) = when (run.status) {
+            io.bigmoeonedge.example.chat.data.ScanRunStatus.DONE -> "Scan finished · $model" to run.verdict.ifEmpty { "Open the results." }
+            io.bigmoeonedge.example.chat.data.ScanRunStatus.STOPPED -> "Scan stopped · $model" to "Finished cells are kept; resume any time."
+            else -> "Scan failed · $model" to run.verdict
+        }
+        val open = PendingIntent.getActivity(
+            ctx, SCAN_NOTIF_ID,
+            Intent(ctx, ChatActivity::class.java).putExtra(ChatActivity.EXTRA_OPEN_SCAN, run.id)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        val n = NotificationCompat.Builder(ctx, CHANNEL_REPLIES)
+            .setSmallIcon(android.R.drawable.stat_notify_chat).setContentTitle(title).setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text)).setContentIntent(open).setAutoCancel(true).build()
+        runCatching { nm.notify(SCAN_NOTIF_ID, n) }
+    }
+
     fun cancel(conversationId: Long) = nm.cancel(conversationId.toInt())
 
     private fun open(conversationId: Long): PendingIntent {
@@ -120,6 +142,7 @@ class ReplyNotifier(private val ctx: Context, private val db: ChatDb) {
         const val CHANNEL_REPLIES = "replies"
         const val KEY_REPLY = "reply"
         private const val MAX_SHOWN = 4
+        const val SCAN_NOTIF_ID = 1002
         private const val REPLY_CODE_BASE = 1_000_000
 
         fun replyText(intent: Intent): CharSequence? = RemoteInput.getResultsFromIntent(intent)?.getCharSequence(KEY_REPLY)

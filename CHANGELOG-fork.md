@@ -4,6 +4,22 @@ Changes that exist only in this fork of [Helldez/BigMoeOnEdge](https://github.co
 Upstream's `CHANGELOG.md` is left alone so that merging `upstream/main` stays conflict-free; engine
 changes offered back upstream go there instead, per `AGENTS.md`.
 
+## [0.28.0-chat.6] - 2026-10-04
+
+### Added
+- **Scan** (`scan/`): finds the fastest engine settings for a model on the phone, running in the
+  `:engine` process with a wake lock so it completes with the screen off. Burst cells compare
+  settings from a cool start, sustained cells measure what a long reply gets once the phone is hot
+  and decide the recommendation, a cooldown gate (thermal headroom, status, CPU frequency caps,
+  battery temperature, free memory) precedes every cell, and the best result is confirmed against
+  the baseline. Lossless by default; lossy settings are opt-in and never applied automatically.
+  Results screen, per-model profile used by chats, CSV export, resumable after the process dies.
+- Database version 2 (migration tested): scan runs, scan cells and model profiles.
+- Fake phone for the emulator: a simulated thermal model and a settings-dependent fake engine speed.
+
+### Changed
+- `EngineSession` is shared by the chat job loop and the scan executor.
+
 ## [0.28.0-chat.5] - 2026-10-04
 
 ### Added

@@ -91,6 +91,63 @@ pauses the chat queue and frees the model (`EngineClient.suspend()`), and return
 - The permission is asked once, with a reason, the first time the app opens. Without it the chat
   works and the reply is waiting when you open the app.
 
+## Scan: the fastest settings for a model
+
+Menu → **Scan**. It runs one model under many engine settings, one at a time, and recommends the
+settings chats should use. It runs inside the `:engine` process, because the memory limit and the
+CPU placement of that process are part of what is being measured, and it keeps going with the screen
+off: the foreground service holds a wake lock for the whole scan, cooldown waits included. Messages
+sent meanwhile queue and are answered afterwards. Expect about 40 minutes for a small model and
+two to four hours for a large one; the screen shows an estimate before Start. Start it with the
+phone cool and **unplugged** (charging heats the phone and every cell records whether it was
+charging), then lock the phone.
+
+**Why two kinds of cell.** A phone throttles after a few minutes of decoding (on the test phone it
+was already at the LIGHT thermal status in the first second once warm), and replies in a chat are
+long. So:
+
+- **Burst** cells (256 tokens from a cool start) compare settings against each other fairly.
+- **Sustained** cells keep one configuration generating for 12 minutes (4 to 20 selectable) and
+  measure what the last five minutes get once the phone is hot. **The recommendation is chosen on
+  this**, so a setting that runs cooler can beat one that is faster for a minute.
+
+**The search.** Start from the lossless baseline (your current engine settings with every lossy knob
+off; "your current settings" runs first when they differ). Each stage changes one knob of the best
+configuration so far and keeps a candidate only if it beats it by 5%, which favours defaults over
+noise: dense weights, expert cache size, threads, I/O lanes, release mmap, row streaming, n-gram
+drafting. The stage-C runner-up joins the sustained runs with the burst winner and the baseline. The
+best sustained configuration is **confirmed** against the baseline in alternating burst cells
+(recommended, baseline, recommended, baseline); a gain under 5% is reported as within noise.
+
+**The cooldown gate.** Before the first cell the phone idles three minutes with the engine unloaded
+(up to 15 if it is not cool) and that state is recorded as the reference. Before every cell the scan
+waits until the thermal headroom, thermal status, CPU frequency caps, battery temperature and free
+memory are back at the reference, polling every 15 s and giving up after 10 minutes (recorded on
+the cell). A fixed sleep would turn the matrix into a measurement of run order
+(`docs/benchmark-method.md`). A cell that reaches thermal status SEVERE is cancelled and re-run
+after cooling, and a burst cell that was throttled for more than a quarter of its run is re-run once
+and, if it still was, compared on its cool-only speed. The phone is never pushed past SEVERE, and
+the scan pauses below 20% battery when not charging.
+
+**Lossless first.** The default scan changes only settings that do not change the text. *Include
+lossy settings* adds dropping cold experts, substitution and a lower top-k at the end, each measured
+against the final lossless recommendation and shown apart with how far its text drifted from the
+lossless text. They are never applied automatically; *Use these settings* on such a row is a
+deliberate choice.
+
+**What it can read.** Only what the app is allowed to read: the thermal API and its headroom, the
+CPU frequency caps, the battery, free memory and the child's `/proc` entries. It cannot read the
+memory cgroup counters or `/sys/class/thermal`, so the memory budget for the cache stage is a fixed
+assumption (the process's ~3.1 GiB limit minus 500 MB) rather than a reading.
+
+**Results.** Per model: the recommendation and a one-line verdict ("Fastest from cold: X. Fastest once
+the phone is hot: Y. Chats use Y."), then the burst, sustained, confirmation and lossy tables with
+warnings for cells that started warm, did not fully cool, were throttled, used buffered I/O, were
+charging or failed. **Use for chats with this model** saves the settings as that model's profile
+(the thread's top bar says *Scan-tuned settings*, and the thread menu resets it). **Export CSV**
+shares the cells and the raw samples. A stopped or killed scan keeps its finished cells and resumes
+at the first unfinished one; a cell that was running is run again.
+
 ## Queue semantics
 
 - Sending is never blocked. A message always lands in the conversation; if the conversation already

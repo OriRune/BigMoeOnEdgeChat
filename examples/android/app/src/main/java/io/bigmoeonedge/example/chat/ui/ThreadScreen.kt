@@ -72,6 +72,7 @@ import java.util.Locale
 fun ThreadScreen(vm: ThreadViewModel, onBack: () -> Unit) {
     val ctx = LocalContext.current
     val ui by vm.ui.collectAsStateWithLifecycle()
+    val tuned by vm.hasProfile.collectAsStateWithLifecycle()
     val conv = ui.conversation
     var draft by rememberSaveable { mutableStateOf("") }
     var menu by remember { mutableStateOf(false) }
@@ -113,7 +114,8 @@ fun ThreadScreen(vm: ThreadViewModel, onBack: () -> Unit) {
                         Text(conv?.title ?: "", maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 18.sp)
                         if (conv != null) {
                             Text(
-                                ChatFormat.modelShortName(conv.modelPath), fontSize = 12.sp, maxLines = 1,
+                                ChatFormat.modelShortName(conv.modelPath) + if (tuned) " · Scan-tuned settings" else "",
+                                fontSize = 12.sp, maxLines = 1,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
@@ -131,6 +133,12 @@ fun ThreadScreen(vm: ThreadViewModel, onBack: () -> Unit) {
                                 text = { Text("Change model") },
                                 onClick = { menu = false; vm.loadModels(); switching = true },
                             )
+                            if (tuned) {
+                                DropdownMenuItem(
+                                    text = { Text("Reset to global settings") },
+                                    onClick = { menu = false; vm.resetProfile() },
+                                )
+                            }
                             DropdownMenuItem(
                                 text = { Text("Export as Markdown") },
                                 onClick = {

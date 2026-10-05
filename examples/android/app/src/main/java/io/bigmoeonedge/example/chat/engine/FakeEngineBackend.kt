@@ -1,5 +1,6 @@
 package io.bigmoeonedge.example.chat.engine
 
+import io.bigmoeonedge.example.scan.FakeThermal
 import org.json.JSONObject
 import java.io.File
 import java.util.Locale
@@ -21,7 +22,7 @@ import kotlin.concurrent.thread
  * setting.
  */
 class FakeEngineBackend(
-    private val tokPerSec: (List<String>) -> Double = { 2.0 },
+    private val tokPerSec: (List<String>) -> Double = FakeThermal::tokPerSec,
     private val loadMs: Long = 1500,
 ) : EngineBackend {
     private val inbox = LinkedBlockingQueue<String>()
@@ -78,9 +79,10 @@ class FakeEngineBackend(
             out.onLine("""BMOE_ERROR {"id":$id,"fatal":false,"msg":"fake engine refused the request"}""")
             return true
         }
-        val rate = tokPerSec(argv) * if (prompt.contains("[slow]")) 0.1 else 1.0
+        val baseRate = tokPerSec(argv) * if (prompt.contains("[slow]")) 0.1 else 1.0
         val nPredict = o.optInt("n_predict", 128)
-        val want = if (prompt.contains("[long]")) 600 else 40
+        // The scan's prompts ask for a full-length reply, so the fake phone has time to heat.
+        val want = if (prompt.contains("[long]")) 600 else if (prompt.contains("Continue")) nPredict else 40
         val total = minOf(want, nPredict)
         val think = o.optBoolean("think", false)
         out.onLine("""BMOE_BEGIN {"id":$id}""")
@@ -96,19 +98,22 @@ class FakeEngineBackend(
         val reasoning = StringBuilder()
         val text = StringBuilder()
         val t0 = System.nanoTime()
-        val gapMs = (1000.0 / rate).toLong().coerceAtLeast(1)
+        FakeThermal.active = true
         if (think) {
             val r = "Let me think about that. "
             reasoning.append(r)
-            out.onLine(progress(0, total, gapMs.toDouble(), "", r))
+            out.onLine(progress(0, total, 1000.0 / baseRate, "", r))
         }
         for ((i, w) in tokens.withIndex()) {
             if (cancelled) break
+            // A hot phone decodes slower: the speed is re-read per token.
+            val gapMs = (1000.0 / (baseRate * FakeThermal.slowdown())).toLong().coerceAtLeast(1)
             Thread.sleep(gapMs)
             val delta = if (i == 0) w else " $w"
             text.append(delta)
             out.onLine(progress(i + 1, total, gapMs.toDouble(), delta, ""))
         }
+        FakeThermal.active = false
         val elapsed = (System.nanoTime() - t0) / 1e9
         val n = if (text.isEmpty()) 0 else text.split(' ').size
         val dropped = if (prompt.contains("[drop2]")) 2 else 0

@@ -40,6 +40,10 @@ import io.bigmoeonedge.example.ModelManager
 import io.bigmoeonedge.example.SettingsScreen
 import io.bigmoeonedge.example.chat.ChatServices
 import io.bigmoeonedge.example.chat.ChatSettings
+import io.bigmoeonedge.example.scan.ScanResultsScreen
+import io.bigmoeonedge.example.scan.ScanResultsViewModel
+import io.bigmoeonedge.example.scan.ScanScreen
+import io.bigmoeonedge.example.scan.ScanViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
@@ -50,16 +54,19 @@ import kotlinx.coroutines.launch
 class ChatActivity : ComponentActivity() {
     // Set by a notification tap; consumed by the NavHost.
     private val openConversation = mutableStateOf<Long?>(null)
+    private val openScan = mutableStateOf<Long?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         openConversation.value = conversationOf(intent)
+        openScan.value = scanOf(intent)
         setContent {
             ChatTheme {
                 Surface(color = MaterialTheme.colorScheme.background) {
                     ChatRoot(
                         openConversation = openConversation.value,
-                        onOpened = { openConversation.value = null },
+                        openScan = openScan.value,
+                        onOpened = { openConversation.value = null; openScan.value = null },
                         onLab = ::openLab,
                     )
                 }
@@ -71,6 +78,7 @@ class ChatActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         conversationOf(intent)?.let { openConversation.value = it }
+        scanOf(intent)?.let { openScan.value = it }
     }
 
     override fun onResume() {
@@ -98,11 +106,15 @@ class ChatActivity : ComponentActivity() {
 
     private fun prefs() = getSharedPreferences("chat_ui", Context.MODE_PRIVATE)
 
+    private fun scanOf(i: Intent?): Long? =
+        i?.getLongExtra(EXTRA_OPEN_SCAN, -1L)?.takeIf { it >= 0 }
+
     private fun conversationOf(i: Intent?): Long? =
         i?.getLongExtra(EXTRA_CONVERSATION_ID, -1L)?.takeIf { it >= 0 }
 
     companion object {
         const val EXTRA_CONVERSATION_ID = "conversationId"
+        const val EXTRA_OPEN_SCAN = "openScanRun"
         private const val KEY_LAB = "lab_open"
 
         /** Cancels a conversation's reply notification once the user is looking at it. */
@@ -118,7 +130,7 @@ fun ChatTheme(content: @Composable () -> Unit) {
 }
 
 @Composable
-private fun ChatRoot(openConversation: Long?, onOpened: () -> Unit, onLab: () -> Unit) {
+private fun ChatRoot(openConversation: Long?, openScan: Long?, onOpened: () -> Unit, onLab: () -> Unit) {
     val ctx = LocalContext.current
     val nav = rememberNavController()
     var chatSettings by remember { mutableStateOf(ChatSettings.load(ctx)) }
@@ -127,6 +139,13 @@ private fun ChatRoot(openConversation: Long?, onOpened: () -> Unit, onLab: () ->
     LaunchedEffect(openConversation) {
         if (openConversation != null) {
             nav.navigate("thread/$openConversation") { launchSingleTop = true }
+            onOpened()
+        }
+    }
+
+    LaunchedEffect(openScan) {
+        if (openScan != null) {
+            nav.navigate("scan/$openScan") { launchSingleTop = true }
             onOpened()
         }
     }
@@ -140,6 +159,7 @@ private fun ChatRoot(openConversation: Long?, onOpened: () -> Unit, onLab: () ->
                 onNew = { nav.navigate("new") },
                 onSettings = { nav.navigate("settings") },
                 onLab = onLab,
+                onScan = { nav.navigate("scan") },
                 onUnload = { ChatServices.client(ctx).unload() },
             )
         }
@@ -161,6 +181,19 @@ private fun ChatRoot(openConversation: Long?, onOpened: () -> Unit, onLab: () ->
             )
             LaunchedEffect(id) { ChatActivity.cancelNotification(ctx, id) }
             ThreadScreen(vm = vm, onBack = { nav.popBackStack() })
+        }
+        composable("scan") {
+            val vm: ScanViewModel = viewModel()
+            ScanScreen(vm = vm, onBack = { nav.popBackStack() }, onOpenRun = { nav.navigate("scan/$it") })
+        }
+        composable("scan/{id}") { entry ->
+            val id = entry.arguments?.getString("id")?.toLongOrNull() ?: return@composable
+            val app = ctx.applicationContext as android.app.Application
+            val vm: ScanResultsViewModel = viewModel(
+                key = "scan$id",
+                factory = viewModelFactory { initializer { ScanResultsViewModel(app, id) } },
+            )
+            ScanResultsScreen(vm = vm, onBack = { nav.popBackStack() })
         }
         composable("settings") {
             ChatSettingsScreen(

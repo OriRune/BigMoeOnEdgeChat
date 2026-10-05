@@ -188,3 +188,64 @@ interface PresenceDao {
     @Query("SELECT * FROM ui_presence WHERE id = 0")
     suspend fun get(): UiPresenceEntity?
 }
+
+@Dao
+interface ScanDao {
+    @Insert
+    suspend fun insertRun(r: ScanRunEntity): Long
+
+    @androidx.room.Update
+    suspend fun updateRun(r: ScanRunEntity)
+
+    @Query("SELECT * FROM scan_runs WHERE id = :id")
+    suspend fun run(id: Long): ScanRunEntity?
+
+    @Query("SELECT * FROM scan_runs WHERE id = :id")
+    fun observeRun(id: Long): Flow<ScanRunEntity?>
+
+    @Query("SELECT * FROM scan_runs ORDER BY startedAt DESC")
+    fun observeRuns(): Flow<List<ScanRunEntity>>
+
+    @Query("SELECT * FROM scan_runs WHERE status = 'RUNNING' ORDER BY startedAt LIMIT 1")
+    suspend fun runningRun(): ScanRunEntity?
+
+    @Query("SELECT * FROM scan_runs WHERE status = 'RUNNING' ORDER BY startedAt LIMIT 1")
+    fun observeRunning(): Flow<ScanRunEntity?>
+
+    @Query("SELECT * FROM scan_runs WHERE modelPath = :path ORDER BY startedAt DESC LIMIT 1")
+    suspend fun latestFor(path: String): ScanRunEntity?
+
+    @Query("DELETE FROM scan_runs WHERE id = :id")
+    suspend fun deleteRun(id: Long)
+
+    @Insert
+    suspend fun insertCell(c: ScanCellEntity): Long
+
+    @androidx.room.Update
+    suspend fun updateCell(c: ScanCellEntity)
+
+    @Query("SELECT * FROM scan_cells WHERE runId = :runId ORDER BY id")
+    suspend fun cells(runId: Long): List<ScanCellEntity>
+
+    @Query("SELECT * FROM scan_cells WHERE runId = :runId ORDER BY id")
+    fun observeCells(runId: Long): Flow<List<ScanCellEntity>>
+
+    @Query("SELECT * FROM scan_cells WHERE id = :id")
+    suspend fun cell(id: Long): ScanCellEntity?
+
+    // Cells a dead engine process left mid-run are run again.
+    @Query("UPDATE scan_cells SET status = 'PENDING' WHERE runId = :runId AND status = 'RUNNING'")
+    suspend fun resetRunningCells(runId: Long)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun putProfile(p: ModelProfileEntity)
+
+    @Query("SELECT * FROM model_profiles WHERE modelPath = :path")
+    suspend fun profile(path: String): ModelProfileEntity?
+
+    @Query("SELECT * FROM model_profiles WHERE modelPath = :path")
+    fun observeProfile(path: String): Flow<ModelProfileEntity?>
+
+    @Query("DELETE FROM model_profiles WHERE modelPath = :path")
+    suspend fun clearProfile(path: String)
+}
