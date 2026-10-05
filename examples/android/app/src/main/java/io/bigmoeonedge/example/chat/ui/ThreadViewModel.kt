@@ -5,7 +5,10 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.core.content.FileProvider
+import io.bigmoeonedge.example.ModelManager
 import io.bigmoeonedge.example.chat.ChatFormat
+import io.bigmoeonedge.example.chat.MarkdownExport
 import io.bigmoeonedge.example.chat.ChatServices
 import io.bigmoeonedge.example.chat.data.ConversationEntity
 import io.bigmoeonedge.example.chat.data.EngineStatusEntity
@@ -13,6 +16,7 @@ import io.bigmoeonedge.example.chat.data.MessageEntity
 import io.bigmoeonedge.example.chat.data.MessageStatus
 import io.bigmoeonedge.example.chat.data.Role
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
@@ -43,6 +47,30 @@ class ThreadViewModel(private val app: Application, val conversationId: Long) : 
     ) { conv, msgs, queued, active, engine ->
         ThreadUi(conv, msgs, queued, active, engine, loaded = true)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ThreadUi())
+
+    private val _models = MutableStateFlow<List<java.io.File>>(emptyList())
+
+    /** MoE models on the device, for the model switch. Header probing reads files, so off the main thread. */
+    val models: StateFlow<List<java.io.File>> = _models
+
+    fun loadModels() {
+        viewModelScope.launch { _models.value = withContext(Dispatchers.IO) { ModelManager.listMoeModels(app) } }
+    }
+
+    /** Takes effect on the next reply, which reloads the model if it differs from the loaded one. */
+    fun setModel(path: String) {
+        viewModelScope.launch { repo.setModel(conversationId, path) }
+    }
+
+    /** Writes the conversation as Markdown and returns a content:// URI for the share sheet. */
+    suspend fun exportMarkdown(): Pair<Uri, String>? = withContext(Dispatchers.IO) {
+        val conv = repo.conversation(conversationId) ?: return@withContext null
+        val msgs = ChatServices.db(app).messages().listFor(conversationId)
+        val dir = java.io.File(app.cacheDir, "exports").apply { mkdirs() }
+        val f = java.io.File(dir, MarkdownExport.fileName(conv.title))
+        f.writeText(MarkdownExport.render(conv, msgs))
+        FileProvider.getUriForFile(app, "${app.packageName}.fileprovider", f) to conv.title
+    }
 
     fun send(text: String) {
         if (text.isBlank()) return

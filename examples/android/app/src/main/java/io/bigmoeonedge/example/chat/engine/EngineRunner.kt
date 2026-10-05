@@ -54,6 +54,9 @@ interface EngineHost {
     fun thermalStatus(): Int
     fun keepLoadedMinutes(): Int
 
+    /** Anonymous memory (RAM + swap) the engine child holds, in MiB, or -1 when it cannot be read. */
+    fun childMemoryMb(pid: Int): Int = -1
+
     /** A reply reached a final status. [status] is DONE, FAILED or CANCELLED. */
     suspend fun replyFinished(messageId: Long, conversationId: Long, status: String)
 
@@ -209,8 +212,10 @@ class EngineRunner(
             host.idle(false)
             return
         }
-        status(EngineStateName.READY, "Model loaded · idle")
-        host.foregroundText("Model loaded · idle")
+        val mb = host.childMemoryMb(l.backend.pid)
+        val ram = if (mb > 0) String.format(java.util.Locale.US, " · %.1f GB in memory", mb / 1024.0) else ""
+        status(EngineStateName.READY, "Model loaded · idle$ram")
+        host.foregroundText("Model loaded · idle$ram")
         host.idle(true)
         when (val minutes = host.keepLoadedMinutes()) {
             -1 -> {}

@@ -66,6 +66,12 @@ pauses the chat queue and frees the model (`EngineClient.suspend()`), and return
   yours). The composer is never disabled: sending while a reply is writing queues it. *Attach*
   inserts a text file (up to 64 KB) into the box. A divider marks where the model's memory begins
   when older messages no longer fit the context.
+- **Thread menu**: Rename, Delete chat, **Change model** (applies from the next reply, which reloads
+  the model first if it differs from the loaded one) and **Export as Markdown** (share sheet; the
+  file holds the finished turns, with reasoning folded into a `<details>` block).
+- **Chats menu**: **Unload model now** frees the memory at once; the banner then reads "Model
+  loaded · <name> · 2.4 GB in memory" while a model is held, from the engine child's anonymous
+  memory plus swap.
 - **Settings** (chat settings, with a button to the engine settings of the lab).
 
 ## Notifications

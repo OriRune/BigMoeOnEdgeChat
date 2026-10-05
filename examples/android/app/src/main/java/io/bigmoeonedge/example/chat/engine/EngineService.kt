@@ -233,6 +233,15 @@ class EngineService : Service(), EngineHost {
     override fun thermalStatus(): Int =
         runCatching { (getSystemService(Context.POWER_SERVICE) as PowerManager).currentThermalStatus }.getOrDefault(0)
 
+    override fun childMemoryMb(pid: Int): Int {
+        if (pid <= 0) return -1
+        return runCatching {
+            val st = File("/proc/$pid/status").readLines()
+            fun kb(key: String) = st.firstOrNull { it.startsWith(key) }?.filter { it.isDigit() }?.toLongOrNull() ?: 0L
+            ((kb("RssAnon:") + kb("VmSwap:")) / 1024).toInt()
+        }.getOrDefault(-1)
+    }
+
     override fun keepLoadedMinutes(): Int {
         ChatSettings.refreshFromDisk(this)
         return ChatSettings.load(this).keepLoadedMinutes

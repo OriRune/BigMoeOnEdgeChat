@@ -4,6 +4,16 @@ Changes that exist only in this fork of [Helldez/BigMoeOnEdge](https://github.co
 Upstream's `CHANGELOG.md` is left alone so that merging `upstream/main` stays conflict-free; engine
 changes offered back upstream go there instead, per `AGENTS.md`.
 
+## [0.28.0-chat.5] - 2026-10-04
+
+### Added
+- Export a chat as Markdown through the share sheet; change a chat's model from the thread menu;
+  the engine banner shows how much memory the loaded model holds. Search over titles and message
+  text arrived with the list screen.
+
+### Changed
+- `res/xml/file_paths.xml`: one more `cache-path` for the exported files.
+
 ## [0.28.0-chat.4] - 2026-10-04
 
 ### Added

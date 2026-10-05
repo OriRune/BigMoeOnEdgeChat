@@ -77,6 +77,7 @@ fun ThreadScreen(vm: ThreadViewModel, onBack: () -> Unit) {
     var menu by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf(false) }
+    var switching by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<MessageEntity?>(null) }
     val scope = rememberCoroutineScope()
 
@@ -126,6 +127,19 @@ fun ThreadScreen(vm: ThreadViewModel, onBack: () -> Unit) {
                         IconButton(onClick = { menu = true }) { Icon(Icons.Filled.MoreVert, contentDescription = "More") }
                         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                             DropdownMenuItem(text = { Text("Rename") }, onClick = { menu = false; renaming = true })
+                            DropdownMenuItem(
+                                text = { Text("Change model") },
+                                onClick = { menu = false; vm.loadModels(); switching = true },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Export as Markdown") },
+                                onClick = {
+                                    menu = false
+                                    scope.launch {
+                                        vm.exportMarkdown()?.let { (uri, title) -> shareMarkdown(ctx, uri, title) }
+                                    }
+                                },
+                            )
                             DropdownMenuItem(text = { Text("Delete chat") }, onClick = { menu = false; deleting = true })
                         }
                     }
@@ -189,6 +203,33 @@ fun ThreadScreen(vm: ThreadViewModel, onBack: () -> Unit) {
     if (renaming && conv != null) {
         RenameDialog(conv.title, onDismiss = { renaming = false }) { vm.rename(it); renaming = false }
     }
+    if (switching && conv != null) {
+        val models by vm.models.collectAsStateWithLifecycle()
+        AlertDialog(
+            onDismissRequest = { switching = false },
+            title = { Text("Change model") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    if (models.isEmpty()) Text("Looking for models…", fontSize = 13.sp)
+                    for (f in models) {
+                        TextButton(onClick = { vm.setModel(f.absolutePath); switching = false }) {
+                            Text(
+                                (if (f.absolutePath == conv.modelPath) "✓ " else "") + ChatFormat.modelShortName(f.absolutePath),
+                                maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                    Text(
+                        "Applies from the next reply. If the model differs from the loaded one it reloads first, " +
+                            "which can take a while.",
+                        fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            },
+            confirmButton = {},
+            dismissButton = { TextButton(onClick = { switching = false }) { Text("Close") } },
+        )
+    }
     if (deleting) {
         AlertDialog(
             onDismissRequest = { deleting = false },
@@ -215,6 +256,18 @@ fun ThreadScreen(vm: ThreadViewModel, onBack: () -> Unit) {
             confirmButton = { TextButton(onClick = { vm.editAndResend(m.id, text); editing = null }) { Text("Resend") } },
             dismissButton = { TextButton(onClick = { editing = null }) { Text("Cancel") } },
         )
+    }
+}
+
+private fun shareMarkdown(ctx: Context, uri: android.net.Uri, title: String) {
+    val i = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+        type = "text/markdown"
+        putExtra(android.content.Intent.EXTRA_STREAM, uri)
+        putExtra(android.content.Intent.EXTRA_SUBJECT, title)
+        addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    runCatching {
+        ctx.startActivity(android.content.Intent.createChooser(i, "Share chat").addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
     }
 }
 

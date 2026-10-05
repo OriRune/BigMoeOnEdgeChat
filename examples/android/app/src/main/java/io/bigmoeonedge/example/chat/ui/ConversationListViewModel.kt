@@ -98,11 +98,12 @@ class ConversationListViewModel(app: Application) : AndroidViewModel(app) {
                 EngineStateName.BUSY.name -> EngineBanner(s.detail.ifEmpty { "Writing a reply…" }, false, false)
                 EngineStateName.SCANNING.name -> EngineBanner(s.detail.ifEmpty { "Scan running" }, false, false)
                 EngineStateName.ERROR.name -> EngineBanner(s.lastError ?: "The engine reported an error.", true, true)
-                EngineStateName.READY.name ->
-                    EngineBanner(
-                        "Model loaded" + (if (s.modelPath.isNotEmpty()) " · " + ChatFormat.modelShortName(s.modelPath) else ""),
-                        false, false,
-                    )
+                EngineStateName.READY.name -> {
+                    // detail is "Model loaded · idle · 2.4 GB in memory" once the queue has drained.
+                    val name = if (s.modelPath.isNotEmpty()) " · " + ChatFormat.modelShortName(s.modelPath) else ""
+                    val ram = s.detail.substringAfter("idle", "").takeIf { it.isNotBlank() } ?: ""
+                    EngineBanner("Model loaded$name$ram", false, false)
+                }
                 else -> null
             }
         }
