@@ -17,6 +17,7 @@ import kotlinx.coroutines.launch
  *       --es text "hello" [--el conv N] [--es model /path.gguf] [--ez fake true] [--ez thinking true]
  *   ... -a DUMP [--el conv N]      prints the messages and the engine status to logcat (tag BmoeChatDebug)
  *   ... -a UNLOAD | -a KILL_ENGINE
+ *   ... -a FOREGROUND --es model /path.gguf --ez on true|false     foreground mode for a model
  */
 class DebugChatReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
@@ -60,6 +61,12 @@ class DebugChatReceiver : BroadcastReceiver() {
                 }
             }
             "UNLOAD" -> ChatServices.client(ctx).unload()
+            "FOREGROUND" -> {
+                val model = intent.getStringExtra("model") ?: "/data/local/tmp/fake.gguf"
+                ChatSettings.setForeground(ctx, model, intent.getBooleanExtra("on", true))
+                ChatServices.client(ctx).unloadAll()
+                Log.i(TAG, "foreground models: ${ChatSettings.foregroundModels(ctx)}")
+            }
             "SCAN" -> {
                 applyFake(ctx, intent)
                 val model = intent.getStringExtra("model") ?: "/data/local/tmp/bmoe/FakeMoE-Q4_0.gguf"

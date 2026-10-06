@@ -10,6 +10,7 @@ import io.bigmoeonedge.example.ModelManager
 import io.bigmoeonedge.example.chat.ChatFormat
 import io.bigmoeonedge.example.chat.MarkdownExport
 import io.bigmoeonedge.example.chat.ChatServices
+import io.bigmoeonedge.example.chat.ChatSettings
 import io.bigmoeonedge.example.chat.data.ConversationEntity
 import io.bigmoeonedge.example.chat.data.EngineStatusEntity
 import io.bigmoeonedge.example.chat.data.MessageEntity
@@ -83,6 +84,30 @@ class ThreadViewModel(private val app: Application, val conversationId: Long) : 
             else ChatServices.scan(app).observeProfile(c.modelPath).map { it != null }
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    private val _foreground = kotlinx.coroutines.flow.MutableStateFlow(false)
+
+    /** True while this conversation's model is set to foreground mode (runs only while the app is open). */
+    val foreground: StateFlow<Boolean> = _foreground
+
+    init {
+        viewModelScope.launch {
+            repo.observeConversation(conversationId).collect { c ->
+                _foreground.value = c != null && withContext(Dispatchers.IO) { ChatSettings.isForeground(app, c.modelPath) }
+            }
+        }
+    }
+
+    /** The model reloads in the other process, so the old copy is unloaded first. */
+    fun setForeground(on: Boolean) {
+        val c = ui.value.conversation ?: return
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { ChatSettings.setForeground(app, c.modelPath, on) }
+            _foreground.value = on
+            client.unloadAll()
+            client.kick()
+        }
+    }
 
     fun resetProfile() {
         val c = ui.value.conversation ?: return

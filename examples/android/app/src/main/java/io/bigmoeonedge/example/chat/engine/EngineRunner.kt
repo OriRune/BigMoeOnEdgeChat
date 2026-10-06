@@ -90,6 +90,23 @@ interface EngineHost {
     /** Low battery pause for the scan (stricter than the chat's): below 20% and not charging. */
     fun scanPauseReason(): String? = null
 
+    // ── foreground mode: two hosts (the :engine process and the main-process service) share one queue ──
+
+    /**
+     * Whether this host serves [modelPath]. The :engine process serves the models that are not set to
+     * foreground mode, the main-process service the ones that are; each leaves the other's replies queued.
+     */
+    fun handles(modelPath: String): Boolean = true
+
+    /** The host that owns the engine status row while idle. A second host writes it only while it is engaged. */
+    val primary: Boolean get() = true
+
+    /**
+     * One engine at a time across processes: both hosts would otherwise kill each other's child when they
+     * load. Returns a token to close when the job ends, or null when the other process holds the engine.
+     */
+    fun tryEngineSlot(): AutoCloseable? = AutoCloseable {}
+
     /** A reply reached a final status. [status] is DONE, FAILED or CANCELLED. */
     suspend fun replyFinished(messageId: Long, conversationId: Long, status: String)
 
@@ -121,6 +138,8 @@ class EngineRunner(
     @Volatile private var scanning = false
 
     @Volatile private var suspended = false
+    @Volatile private var frozen = false
+    private var freezeJob: Job? = null
     @Volatile private var activeId = -1L
     @Volatile private var requeueActive = false
     @Volatile private var cancelRequested = false
@@ -186,11 +205,43 @@ class EngineRunner(
         kick()
     }
 
+    /**
+     * Foreground mode, the app left the front ([on]) or came back. A running reply is frozen in place (its
+     * memory and progress stay) and thawed on return; a loaded idle model is unloaded, since the main
+     * process no longer has the memory to keep it. A reply frozen for too long is put back in the queue,
+     * so a forgotten phone does not hold the model's memory for good.
+     */
+    fun freeze(on: Boolean) {
+        if (on && activeId < 0 && !scanning) {
+            unload()
+            return
+        }
+        frozen = on
+        freezeJob?.cancel()
+        live?.backend?.freeze(on)
+        scope.launch {
+            if (activeId >= 0) {
+                status(EngineStateName.BUSY, "", activeId = activeId, paused = if (on) PAUSED_OUT_OF_APP else null)
+            }
+        }
+        if (on) {
+            freezeJob = scope.launch {
+                delay(FREEZE_LIMIT_MS)
+                if (frozen && activeId >= 0) {
+                    requeueActive = true
+                    live?.backend?.freeze(false)
+                    live?.backend?.send(EngineProtocol.CANCEL)
+                }
+            }
+        } else kick()
+    }
+
     // ── recovery ──
 
     /** Messages a dead engine process left PREFILLING or GENERATING get one more try, then fail. */
     internal suspend fun recover() {
         for (m in db.messages().active()) {
+            if (!serves(m)) continue
             val r = QueueRules.recover(m)
             if (r.status == MessageStatus.QUEUED) db.messages().requeue(m.id, r.attempt, m.queuedAt)
             else db.messages().setStatus(m.id, MessageStatus.FAILED, r.error)
@@ -208,6 +259,11 @@ class EngineRunner(
             val scanRun = if (suspended) null else db.scan().runningRun()
             if (scanRun != null) {
                 // One engine owner: the chat queue waits (messages still queue) while a scan runs.
+                val slot = host.tryEngineSlot()
+                if (slot == null) {
+                    retryJob = scope.launch { delay(SLOT_RETRY_MS); kick() }
+                    break
+                }
                 teardown()
                 host.holdWake(true)
                 ran = true
@@ -216,6 +272,7 @@ class EngineRunner(
                     scanExecutor.run(scanRun)
                 } finally {
                     scanning = false
+                    slot.close()
                 }
                 // A run that returned still marked RUNNING would loop here forever.
                 db.scan().run(scanRun.id)?.takeIf { it.status == io.bigmoeonedge.example.chat.data.ScanRunStatus.RUNNING }
@@ -227,7 +284,7 @@ class EngineRunner(
                 status(EngineStateName.IDLE, "", paused = "Engine lab is open")
                 break
             }
-            val next = QueueRules.pickNext(db.messages().queued()) ?: break
+            val next = pickMine() ?: break
             val pause = host.pauseReason()
             if (pause != null) {
                 status(EngineStateName.IDLE, pause, paused = pause)
@@ -238,24 +295,37 @@ class EngineRunner(
                 host.idle(live != null)
                 return
             }
+            val slot = host.tryEngineSlot()
+            if (slot == null) {
+                // The other process is working; its status row is the truth, so say nothing here.
+                retryJob = scope.launch { delay(SLOT_RETRY_MS); kick() }
+                if (ran) host.holdWake(false)
+                host.idle(live != null)
+                return
+            }
             if (!ran) {
                 host.holdWake(true)
                 ran = true
             }
-            runJob(next)
+            try {
+                runJob(next)
+            } finally {
+                slot.close()
+            }
         }
         if (ran) host.holdWake(false)
-        afterQueue()
+        afterQueue(ran)
     }
 
-    private suspend fun afterQueue() {
+    private suspend fun afterQueue(ran: Boolean) {
         if (suspended) {
             host.idle(false)
             return
         }
         val l = live
         if (l == null) {
-            status(EngineStateName.IDLE, "")
+            // Nothing ran and nothing is loaded: the other host may be mid-reply, and its row is the truth.
+            if (ran) status(EngineStateName.IDLE, "")
             host.idle(false)
             return
         }
@@ -278,6 +348,15 @@ class EngineRunner(
         teardown()
         status(EngineStateName.IDLE, "")
         host.idle(false)
+    }
+
+    /** The oldest queued reply this host serves. */
+    private suspend fun pickMine(): MessageEntity? =
+        QueueRules.pickNext(db.messages().queued().filter { serves(it) })
+
+    private suspend fun serves(m: MessageEntity): Boolean {
+        val conv = db.conversations().get(m.conversationId) ?: return host.primary // an orphan: one host deletes it
+        return host.handles(conv.modelPath)
     }
 
     // ── one reply ──
@@ -452,6 +531,7 @@ class EngineRunner(
     // ── status row ──
 
     private var lastIo = ""
+    private var wroteBusy = false
 
     private suspend fun status(
         state: EngineStateName, detail: String, activeId: Long? = null, step: Int = 0, tokPerSec: Double = 0.0,
@@ -459,6 +539,10 @@ class EngineRunner(
     ) {
         if (ioMode != null && ioMode.isNotEmpty()) lastIo = ioMode
         val l = live
+        // A secondary host writes the row only while it has something of its own to report (and once more
+        // when it lets go), so an idle one never overwrites the other host's progress.
+        if (!host.primary && l == null && !scanning && !wroteBusy) return
+        wroteBusy = state != EngineStateName.IDLE
         db.engineStatus().put(
             EngineStatusEntity(
                 state = state.name,
@@ -477,10 +561,13 @@ class EngineRunner(
         )
     }
 
-    private companion object {
+    companion object {
         const val FLUSH_MS = 500L
         const val EXIT_GRACE_MS = 3000L
         const val EXIT_FORCE_MS = 3000L
         const val PAUSE_RETRY_MS = 120_000L
+        const val SLOT_RETRY_MS = 2_000L
+        const val FREEZE_LIMIT_MS = 30 * 60_000L
+        const val PAUSED_OUT_OF_APP = "Paused, return to the app to continue"
     }
 }

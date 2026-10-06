@@ -75,6 +75,16 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="On-device LLM inference that continues while the screen is off" />
         </service>
+        <!-- Foreground mode: the same engine, in the main process, for the models that trade background
+             replies for a larger memory budget (CHAT.md). -->
+        <service
+            android:name=".chat.engine.ForegroundEngineService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="On-device LLM inference while the app is open" />
+        </service>
         <!-- WorkManager runs DownloadWorker's foreground transfer through its own
              SystemForegroundService, which it declares without a foregroundServiceType. On API 34+
              the type passed to startForeground (dataSync) must be a subset of the type on the

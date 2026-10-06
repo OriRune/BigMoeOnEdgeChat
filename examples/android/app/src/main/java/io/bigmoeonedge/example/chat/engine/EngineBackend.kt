@@ -33,4 +33,10 @@ interface EngineBackend {
 
     /** Kill now. */
     fun kill()
+
+    /**
+     * Stop the process from running without ending it ([on]) and let it run again. A frozen engine keeps
+     * its memory and its place in the reply; foreground mode uses it while the app is not in front.
+     */
+    fun freeze(on: Boolean) {}
 }

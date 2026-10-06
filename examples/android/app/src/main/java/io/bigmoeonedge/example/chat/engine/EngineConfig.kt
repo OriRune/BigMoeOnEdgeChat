@@ -31,18 +31,21 @@ data class EngineConfig(
             chat: ChatSettings,
             modelBytes: Long,
             override: AppSettings? = null,
+            // Foreground mode runs in the main process while the app is in front, which gets about twice the
+            // memory of :engine, so the small footprint is not applied.
+            foreground: Boolean = false,
         ): AppSettings {
             // A scan-tuned profile replaces the global engine settings wholesale, and stands on its own.
             if (override != null) {
-                return override.copy(nPredict = chat.nPredict, sessionCtx = autoCtx(chat, modelBytes, override.mmap))
+                return override.copy(nPredict = chat.nPredict, sessionCtx = autoCtx(chat, modelBytes, override.mmap, foreground))
             }
             var s = base.copy(
                 nPredict = chat.nPredict,
-                sessionCtx = autoCtx(chat, modelBytes, base.mmap),
+                sessionCtx = autoCtx(chat, modelBytes, base.mmap, foreground),
                 // Lossless unless the user set it in the engine settings screen.
                 metricsCsv = false,
             )
-            if (modelBytes >= BIG_MODEL_BYTES && !s.mmap) {
+            if (modelBytes >= BIG_MODEL_BYTES && !s.mmap && !foreground) {
                 // Cache + dense weights + KV have to fit the background budget. 500 MiB is below the
                 // engine's floor, hence --force-cache (sessionArgv adds it).
                 if (s.cacheMb == AppSettings.CACHE_AUTO || s.cacheMb > SMALL_FOOTPRINT_CACHE_MB) {
@@ -53,9 +56,9 @@ data class EngineConfig(
             return s
         }
 
-        private fun autoCtx(chat: ChatSettings, modelBytes: Long, mmap: Boolean): Int = when {
+        private fun autoCtx(chat: ChatSettings, modelBytes: Long, mmap: Boolean, foreground: Boolean): Int = when {
             chat.sessionCtx != ChatSettings.CTX_AUTO -> chat.sessionCtx
-            modelBytes >= BIG_MODEL_BYTES && !mmap -> SMALL_FOOTPRINT_CTX
+            modelBytes >= BIG_MODEL_BYTES && !mmap && !foreground -> SMALL_FOOTPRINT_CTX
             else -> AppSettings.SESSION_CTX
         }
 

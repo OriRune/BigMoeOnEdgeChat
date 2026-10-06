@@ -75,7 +75,7 @@ class ReplyNotifier(private val ctx: Context, private val db: ChatDb) {
         if (queuedNote) b.setSubText("Queued")
         if (failed != null) b.addAction(0, "Retry", service(EngineService.ACTION_RETRY, conversationId, failed.id))
         else b.addAction(0, "Mark read", service(EngineService.ACTION_MARK_READ, conversationId))
-        runCatching { nm.notify(conversationId.toInt(), b.build()) }
+        runCatching { nm.notify(notificationId(conversationId), b.build()) }
     }
 
     /** One notification when a scan ends, on the reply channel so it is heard. */
@@ -100,7 +100,7 @@ class ReplyNotifier(private val ctx: Context, private val db: ChatDb) {
         runCatching { nm.notify(SCAN_NOTIF_ID, n) }
     }
 
-    fun cancel(conversationId: Long) = nm.cancel(conversationId.toInt())
+    fun cancel(conversationId: Long) = nm.cancel(notificationId(conversationId))
 
     private fun open(conversationId: Long): PendingIntent {
         val i = Intent(ctx, ChatActivity::class.java)
@@ -144,6 +144,9 @@ class ReplyNotifier(private val ctx: Context, private val db: ChatDb) {
         private const val MAX_SHOWN = 4
         const val SCAN_NOTIF_ID = 1002
         private const val REPLY_CODE_BASE = 1_000_000
+
+        /** Clear of the engine's and the scan's fixed ids (1001..1003), which a small conversation id would hit. */
+        fun notificationId(conversationId: Long): Int = 2_000_000 + conversationId.toInt()
 
         fun replyText(intent: Intent): CharSequence? = RemoteInput.getResultsFromIntent(intent)?.getCharSequence(KEY_REPLY)
     }

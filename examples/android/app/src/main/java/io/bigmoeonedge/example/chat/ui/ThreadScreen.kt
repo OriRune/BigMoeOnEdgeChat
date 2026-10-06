@@ -73,6 +73,8 @@ fun ThreadScreen(vm: ThreadViewModel, onBack: () -> Unit) {
     val ctx = LocalContext.current
     val ui by vm.ui.collectAsStateWithLifecycle()
     val tuned by vm.hasProfile.collectAsStateWithLifecycle()
+    val foreground by vm.foreground.collectAsStateWithLifecycle()
+    var foregroundDialog by remember { mutableStateOf(false) }
     val conv = ui.conversation
     var draft by rememberSaveable { mutableStateOf("") }
     var menu by remember { mutableStateOf(false) }
@@ -114,7 +116,8 @@ fun ThreadScreen(vm: ThreadViewModel, onBack: () -> Unit) {
                         Text(conv?.title ?: "", maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 18.sp)
                         if (conv != null) {
                             Text(
-                                ChatFormat.modelShortName(conv.modelPath) + if (tuned) " · Scan-tuned settings" else "",
+                                ChatFormat.modelShortName(conv.modelPath) + (if (tuned) " · Scan-tuned settings" else "") +
+                                    (if (foreground) " · Foreground mode" else ""),
                                 fontSize = 12.sp, maxLines = 1,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -139,6 +142,10 @@ fun ThreadScreen(vm: ThreadViewModel, onBack: () -> Unit) {
                                     onClick = { menu = false; vm.resetProfile() },
                                 )
                             }
+                            DropdownMenuItem(
+                                text = { Text(if (foreground) "Foreground mode: on" else "Foreground mode: off") },
+                                onClick = { menu = false; foregroundDialog = true },
+                            )
                             DropdownMenuItem(
                                 text = { Text("Export as Markdown") },
                                 onClick = {
@@ -236,6 +243,31 @@ fun ThreadScreen(vm: ThreadViewModel, onBack: () -> Unit) {
             },
             confirmButton = {},
             dismissButton = { TextButton(onClick = { switching = false }) { Text("Close") } },
+        )
+    }
+    if (foregroundDialog) {
+        AlertDialog(
+            onDismissRequest = { foregroundDialog = false },
+            title = { Text(if (foreground) "Turn foreground mode off?" else "Use foreground mode for this model?") },
+            text = {
+                Text(
+                    if (foreground) {
+                        "Replies run in the background again, within the smaller memory budget, so a large model " +
+                            "is slower. The model reloads."
+                    } else {
+                        "The model gets about twice the memory, which makes a large model faster, but it only " +
+                            "answers while this app is open. Leaving the app pauses a reply and coming back " +
+                            "continues it; replies queue until then and no notification arrives while the app is " +
+                            "closed. This applies to every chat with this model, and the model reloads."
+                    },
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { foregroundDialog = false; vm.setForeground(!foreground) }) {
+                    Text(if (foreground) "Turn off" else "Turn on")
+                }
+            },
+            dismissButton = { TextButton(onClick = { foregroundDialog = false }) { Text("Cancel") } },
         )
     }
     if (deleting) {

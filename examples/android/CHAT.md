@@ -46,6 +46,17 @@ UI process (main)                          :engine process
   395 s, and ~0.65 tok/s with a 500 MiB cache and a 2048 context). So for a model file over 6 GiB
   the chat uses `--cache-mb 500 --force-cache` and `-c 2048` unless you set a context yourself
   (`EngineConfig`). Smaller models keep the lab's engine settings.
+- **Foreground mode (per model).** Only a process that is `top-app` gets ~6 GiB; `:engine` never does.
+  *Thread menu → Foreground mode* runs that model's chats in `ForegroundEngineService`, a second
+  engine service in the main process, without the small footprint. The price: it only works while the
+  app is in front. Leaving the app freezes the running reply in place (`SIGSTOP` on the engine child;
+  memory and progress stay) and coming back continues it; an idle loaded model is unloaded instead;
+  a reply frozen for 30 minutes is put back in the queue. Replies for such a model wait in the queue
+  while the app is closed (no notification, no inline reply), then run when it opens. Each service only
+  serves its own models, and a file lock (`engine.slot`) lets one engine work at a time across the two
+  processes, so a scan or a background reply makes a foreground reply wait. Switching the setting
+  unloads the model, which then reloads in the other process. The setting is per model and lives in
+  the chat settings file (`foregroundModels`).
 
 ## Screens
 
@@ -186,6 +197,7 @@ adb shell am start -n io.github.orirune.bmoechat.dev/io.bigmoeonedge.example.Mai
 adb shell am broadcast -n $R -a SEND --es text "'hello there'" --es model /sdcard/Download/<model>.gguf
 adb shell am broadcast -n $R -a SEND --es text "'and again'" --el conv 1      # same conversation
 adb shell am broadcast -n $R -a SEND --es text "'hi'" --ez fake true           # emulator: fake engine
+adb shell am broadcast -n $R -a FOREGROUND --es model /sdcard/Download/<model>.gguf --ez on true
 adb shell am broadcast -n $R -a DUMP                                           # then: adb logcat -s BmoeChatDebug
 ```
 

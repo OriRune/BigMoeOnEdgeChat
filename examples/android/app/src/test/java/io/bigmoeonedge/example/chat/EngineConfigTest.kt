@@ -21,6 +21,19 @@ class EngineConfigTest {
         assertTrue(argv.containsAll(listOf("--cache-mb", "500", "--force-cache")))
     }
 
+    @Test fun foregroundModeKeepsTheBigModelsFullFootprint() {
+        val s = EngineConfig.resolve(AppSettings(), chat, 20 * gb, foreground = true)
+        assertEquals(2000, s.cacheMb)
+        assertEquals(4096, s.sessionCtx)
+        assertFalse(EngineConfig.argv(s, chat, "/cli", "/m.gguf").contains("--force-cache"))
+    }
+
+    @Test fun foregroundModeIsADifferentSessionFromTheBackgroundOne() {
+        val bg = EngineConfig.resolve(AppSettings(), chat, 20 * gb)
+        val fg = EngineConfig.resolve(AppSettings(), chat, 20 * gb, foreground = true)
+        assertNotEquals(EngineConfig.signature(bg, chat, "/m.gguf"), EngineConfig.signature(fg, chat, "/m.gguf"))
+    }
+
     @Test fun aSmallModelKeepsTheUsersEngineSettings() {
         val s = EngineConfig.resolve(AppSettings(), chat, 4 * gb)
         assertEquals(2000, s.cacheMb)

@@ -62,6 +62,21 @@ data class ChatSettings(
         const val PREFS = "chat_settings"
 
         /**
+         * Models set to foreground mode: they run in the main process, faster, but only while the app is in
+         * front. Per model, not part of [ChatSettings], so saving the chat settings never touches it.
+         */
+        fun foregroundModels(ctx: Context): Set<String> =
+            ctx.prefs().getStringSet("foregroundModels", emptySet()).orEmpty().toSet()
+
+        fun isForeground(ctx: Context, modelPath: String): Boolean = modelPath in foregroundModels(ctx)
+
+        /** Written synchronously: the next thing the caller does is kick an engine service that reads it. */
+        fun setForeground(ctx: Context, modelPath: String, on: Boolean) {
+            val cur = foregroundModels(ctx)
+            ctx.prefs().edit().putStringSet("foregroundModels", if (on) cur + modelPath else cur - modelPath).commit()
+        }
+
+        /**
          * The engine process reads settings the UI process wrote after this process cached the file.
          * MULTI_PROCESS makes getSharedPreferences re-read a file changed behind its back; it is
          * deprecated for writers, but a read-only consumer of a file one process writes is exactly

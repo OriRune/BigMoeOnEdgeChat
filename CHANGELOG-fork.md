@@ -4,6 +4,19 @@ Changes that exist only in this fork of [Helldez/BigMoeOnEdge](https://github.co
 Upstream's `CHANGELOG.md` is left alone so that merging `upstream/main` stays conflict-free; engine
 changes offered back upstream go there instead, per `AGENTS.md`.
 
+## [0.28.0-chat.7] - 2026-10-06
+
+### Added
+- **Foreground mode** per model (thread menu): the model's chats run in a second engine service in the
+  main process, which gets about twice the memory of `:engine`, so a large model keeps its full
+  footprint and is faster. It works only while the app is in front: leaving the app freezes a running
+  reply (`SIGSTOP`) and coming back thaws it, an idle loaded model is unloaded, and replies queue while
+  the app is closed. Each service serves only its own models, and a file lock keeps one engine running
+  at a time across both processes.
+
+### Changed
+- The engine status row is no longer rewritten as idle by a service that has nothing to do.
+
 ## [0.28.0-chat.6] - 2026-10-04
 
 ### Added

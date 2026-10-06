@@ -28,6 +28,7 @@ class FakeEngineBackend(
     private val inbox = LinkedBlockingQueue<String>()
     @Volatile private var alive = false
     @Volatile private var cancelled = false
+    @Volatile private var frozen = false
     @Volatile private var argv: List<String> = emptyList()
 
     override val isAlive: Boolean get() = alive
@@ -106,6 +107,8 @@ class FakeEngineBackend(
         }
         for ((i, w) in tokens.withIndex()) {
             if (cancelled) break
+            // A frozen process makes no progress; a cancel or a kill still ends the wait.
+            while (frozen && !cancelled && alive) Thread.sleep(20)
             // A hot phone decodes slower: the speed is re-read per token.
             val gapMs = (1000.0 / (baseRate * FakeThermal.slowdown())).toLong().coerceAtLeast(1)
             Thread.sleep(gapMs)
@@ -147,6 +150,10 @@ class FakeEngineBackend(
         }
         inbox.put(json)
         return true
+    }
+
+    override fun freeze(on: Boolean) {
+        frozen = on
     }
 
     override fun close() {

@@ -23,6 +23,7 @@ import io.bigmoeonedge.example.BuildConfig
 import io.bigmoeonedge.example.ModelManager
 import io.bigmoeonedge.example.R
 import io.bigmoeonedge.example.RunService
+import io.bigmoeonedge.example.chat.AppForeground
 import io.bigmoeonedge.example.chat.ChatSettings
 import io.bigmoeonedge.example.chat.data.ChatDb
 import io.bigmoeonedge.example.chat.data.ConversationEntity
@@ -50,7 +51,13 @@ import java.io.File
  * from throttling the UI thread when the model fills memory. All job logic is in [EngineRunner];
  * this class is the Android side: foreground notification, wake lock, settings, battery.
  */
-class EngineService : Service(), EngineHost {
+open class EngineService : Service(), EngineHost {
+    /** True in the main-process subclass: it serves the models set to foreground mode, only while the app is in front. */
+    protected open val foregroundMode: Boolean = false
+
+    // Two services of one app: the same id would make one's notification replace and remove the other's.
+    private val notifId: Int get() = if (foregroundMode) NOTIF_ID_FOREGROUND else NOTIF_ID
+
     private lateinit var runner: EngineRunner
     private lateinit var notifier: ReplyNotifier
     private lateinit var repo: ChatRepository
@@ -74,6 +81,10 @@ class EngineService : Service(), EngineHost {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    private val appListener = AppForeground.Listener { front ->
+        if (front) runner.freeze(false) else runner.freeze(true)
+    }
+
     override fun onCreate() {
         super.onCreate()
         ensureChannel()
@@ -84,6 +95,7 @@ class EngineService : Service(), EngineHost {
         runner = EngineRunner(db, this)
         repo = ChatRepository(db, { runner.kick() })
         runner.start()
+        if (foregroundMode) AppForeground.add(appListener)
         registerReceiver(
             batteryKick,
             IntentFilter().apply {
@@ -138,6 +150,8 @@ class EngineService : Service(), EngineHost {
 
     override fun onDestroy() {
         runCatching { unregisterReceiver(batteryKick) }
+        if (foregroundMode) AppForeground.remove(appListener)
+        slot?.let { runCatching { it.close() } }
         main.removeCallbacksAndMessages(null)
         runner.shutdown()
         io.coroutineContext[kotlinx.coroutines.Job]?.cancel()
@@ -156,7 +170,7 @@ class EngineService : Service(), EngineHost {
         // A profile saved from a scan replaces the global engine settings for this model.
         val profile = ChatDb.get(this).scan().profile(conv.modelPath)
             ?.let { runCatching { SettingsJson.fromJson(it.settingsJson) }.getOrNull() }
-        val s = EngineConfig.resolve(base, chat, model.length(), override = profile)
+        val s = EngineConfig.resolve(base, chat, model.length(), override = profile, foreground = foregroundMode)
         val cli = ModelManager.cliPath(this)
         val argv = EngineConfig.argv(s, chat, cli, conv.modelPath)
         val native = applicationInfo.nativeLibraryDir
@@ -179,6 +193,42 @@ class EngineService : Service(), EngineHost {
             fake = fake,
             modelName = model.nameWithoutExtension.take(40),
         )
+    }
+
+    // ── foreground mode ──
+
+    override fun handles(modelPath: String): Boolean {
+        ChatSettings.refreshFromDisk(this)
+        return ChatSettings.isForeground(this, modelPath) == foregroundMode
+    }
+
+    override val primary: Boolean get() = !foregroundMode
+
+    private var slot: SlotLock? = null
+
+    /** An exclusive lock on a file in filesDir: held by whichever process has a job, gone if it dies. */
+    private class SlotLock(private val file: java.io.RandomAccessFile, private val lock: java.nio.channels.FileLock) : AutoCloseable {
+        override fun close() {
+            runCatching { lock.release() }
+            runCatching { file.close() }
+        }
+    }
+
+    override fun tryEngineSlot(): AutoCloseable? {
+        val f = runCatching { java.io.RandomAccessFile(File(filesDir, "engine.slot"), "rw") }.getOrNull() ?: return AutoCloseable {}
+        val l = try {
+            f.channel.tryLock()
+        } catch (_: java.nio.channels.OverlappingFileLockException) {
+            null // this process holds it already (the other service class shares the file in one JVM only in tests)
+        } catch (_: Throwable) {
+            runCatching { f.close() }
+            return AutoCloseable {} // locking unavailable: do not block the queue on it
+        }
+        if (l == null) {
+            runCatching { f.close() }
+            return null
+        }
+        return SlotLock(f, l).also { slot = it }
     }
 
     // ── the scan ──
@@ -294,7 +344,7 @@ class EngineService : Service(), EngineHost {
     private var lastPosted = 0L
     private val postText = Runnable {
         lastPosted = System.currentTimeMillis()
-        (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).notify(NOTIF_ID, build(lastText))
+        (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).notify(notifId, build(lastText))
     }
 
     override fun holdWake(on: Boolean) {
@@ -315,6 +365,7 @@ class EngineService : Service(), EngineHost {
     }
 
     override fun pauseReason(): String? {
+        if (foregroundMode && !AppForeground.isForeground) return EngineRunner.PAUSED_OUT_OF_APP
         ChatSettings.refreshFromDisk(this)
         if (!ChatSettings.load(this).pauseOnLowBattery) return null
         val b = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED)) ?: return null
@@ -372,9 +423,9 @@ class EngineService : Service(), EngineHost {
     private fun enterForeground(text: String) {
         val n = build(text)
         if (Build.VERSION.SDK_INT >= 34) {
-            ServiceCompat.startForeground(this, NOTIF_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+            ServiceCompat.startForeground(this, notifId, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
         } else {
-            startForeground(NOTIF_ID, n)
+            startForeground(notifId, n)
         }
     }
 
@@ -383,7 +434,7 @@ class EngineService : Service(), EngineHost {
             PendingIntent.getActivity(this, 0, it, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         }
         val stop = PendingIntent.getService(
-            this, 1, Intent(this, EngineService::class.java).setAction(ACTION_STOP_ACTIVE),
+            this, 1, Intent(this, javaClass).setAction(ACTION_STOP_ACTIVE),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         return NotificationCompat.Builder(this, CHANNEL_ENGINE)
@@ -414,6 +465,7 @@ class EngineService : Service(), EngineHost {
 
         const val CHANNEL_ENGINE = "engine"
         const val NOTIF_ID = 1001
+        const val NOTIF_ID_FOREGROUND = 1003
 
         // A reply at 0.5 tok/s can run most of an hour; the upstream service's 30 minutes would cut it.
         private const val WAKE_MS = 60 * 60 * 1000L

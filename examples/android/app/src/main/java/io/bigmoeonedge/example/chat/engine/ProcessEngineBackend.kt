@@ -72,6 +72,11 @@ class ProcessEngineBackend(private val pidFile: File) : EngineBackend {
         main.postDelayed({ kill() }, FORCE_KILL_MS)
     }
 
+    override fun freeze(on: Boolean) {
+        val p = pid
+        if (p > 0) runCatching { android.os.Process.sendSignal(p, if (on) SIGSTOP else SIGCONT) }
+    }
+
     override fun kill() {
         synchronized(writeLock) {
             runCatching { writer?.close() }
@@ -82,6 +87,8 @@ class ProcessEngineBackend(private val pidFile: File) : EngineBackend {
 
     companion object {
         private const val FORCE_KILL_MS = 2000L
+        private const val SIGSTOP = 19
+        private const val SIGCONT = 18
 
         /** The stubs have no Process.pid(); the implementation class has had a pid field since the first release. */
         fun pidOf(p: Process): Int = runCatching {

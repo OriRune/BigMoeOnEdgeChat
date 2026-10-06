@@ -38,7 +38,9 @@ import io.bigmoeonedge.example.AppSettings
 import io.bigmoeonedge.example.MainActivity
 import io.bigmoeonedge.example.ModelManager
 import io.bigmoeonedge.example.SettingsScreen
+import io.bigmoeonedge.example.chat.AppForeground
 import io.bigmoeonedge.example.chat.ChatServices
+import io.bigmoeonedge.example.chat.notify.ReplyNotifier
 import io.bigmoeonedge.example.chat.ChatSettings
 import io.bigmoeonedge.example.scan.ScanResultsScreen
 import io.bigmoeonedge.example.scan.ScanResultsViewModel
@@ -81,6 +83,16 @@ class ChatActivity : ComponentActivity() {
         scanOf(intent)?.let { openScan.value = it }
     }
 
+    override fun onStart() {
+        super.onStart()
+        AppForeground.activityStarted()
+    }
+
+    override fun onStop() {
+        AppForeground.activityStopped()
+        super.onStop()
+    }
+
     override fun onResume() {
         super.onResume()
         val client = ChatServices.client(this)
@@ -94,7 +106,9 @@ class ChatActivity : ComponentActivity() {
             val db = ChatServices.db(this@ChatActivity)
             val waiting = db.messages().queued().isNotEmpty() || db.messages().active().isNotEmpty() ||
                 db.scan().runningRun() != null
-            if (waiting && !EngineLiveness.isAlive(this@ChatActivity)) client.kick()
+            // Replies for models in foreground mode only run while the app is in front: start them now.
+            val foregroundWork = ChatSettings.foregroundModels(this@ChatActivity).isNotEmpty()
+            if (waiting && (foregroundWork || !EngineLiveness.isAlive(this@ChatActivity))) client.kick()
         }
     }
 
@@ -120,7 +134,7 @@ class ChatActivity : ComponentActivity() {
 
         /** Cancels a conversation's reply notification once the user is looking at it. */
         fun cancelNotification(ctx: Context, conversationId: Long) {
-            (ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(conversationId.toInt())
+            (ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(ReplyNotifier.notificationId(conversationId))
         }
     }
 }
