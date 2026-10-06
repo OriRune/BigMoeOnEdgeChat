@@ -22,6 +22,9 @@ changes offered back upstream go there instead, per `AGENTS.md`.
 - Scan: a model load that takes over 45 minutes (thrashing swap) is recorded as failed, a burst cell
   is not re-run after a cooldown gate that gave up (the second attempt would start warm too), and
   opening the app kicks a scan that is marked running.
+- Scan: the settings a scan starts from are stored with the run (database version 3, migration
+  tested). Before, a resume re-read the global settings, and a change made while the scan was paused
+  gave every cell a new identity, so finished cells were measured again.
 
 ## [0.28.0-chat.5] - 2026-10-04
 

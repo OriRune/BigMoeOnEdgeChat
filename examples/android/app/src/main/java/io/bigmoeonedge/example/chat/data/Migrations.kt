@@ -20,3 +20,10 @@ val MIGRATION_1_2 = object : Migration(1, 2) {
         )
     }
 }
+
+/** Version 3 stores the settings a scan started from, so a resumed scan keeps its baseline. */
+val MIGRATION_2_3 = object : Migration(2, 3) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `scan_runs` ADD COLUMN `currentJson` TEXT NOT NULL DEFAULT ''")
+    }
+}

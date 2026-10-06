@@ -28,7 +28,11 @@ class ScanExecutorTest {
     private lateinit var db: ChatDb
     private val finished = mutableListOf<ScanRunEntity>()
 
+    // What "your current settings" are today; a test changes it between a stop and a resume.
+    private var currentThreads = 4
+
     private val host = object : EngineHost {
+        override suspend fun scanCurrentSettings(modelPath: String) = io.bigmoeonedge.example.AppSettings(threads = currentThreads)
         override suspend fun jobConfig(conv: ConversationEntity) = error("not used")
         override fun createBackend(cfg: JobConfig): EngineBackend = FakeEngineBackend(loadMs = 50)
         override suspend fun clearOtherEngines(selfPid: Int) {}
@@ -116,6 +120,29 @@ class ScanExecutorTest {
         running.forEach { r -> assertEquals(CellStatus.DONE, cells.first { it.id == r.id }.status) }
         val doneIdentities = cells.filter { it.status == CellStatus.DONE }.map { Triple(it.stage, it.label, it.attempt) }
         assertEquals(doneIdentities.size, doneIdentities.toSet().size)
+    }
+
+    @Test fun aResumedScanKeepsItsBaselineWhenTheGlobalSettingsChange() = runBlocking {
+        val run = newRun(sustained = false)
+        val exec = ScanExecutor(db, host, timing)
+        val job = CoroutineScope(Dispatchers.Default).launch { exec.run(run) }
+        withTimeout(120_000) { while (db.scan().cells(run.id).count { it.status == CellStatus.DONE } < 2) delay(50) }
+        exec.stop()
+        job.join()
+        val before = db.scan().cells(run.id).filter { it.status == CellStatus.DONE }.map { it.id }
+        assertTrue(before.isNotEmpty())
+
+        // The user edits their global settings while the scan is paused.
+        currentThreads = 2
+        db.scan().updateRun(db.scan().run(run.id)!!.copy(status = ScanRunStatus.RUNNING))
+        withTimeout(240_000) { ScanExecutor(db, host, timing).run(db.scan().run(run.id)!!) }
+
+        // Every cell recorded before the pause still counts, and nothing was planned from the new baseline.
+        val cells = db.scan().cells(run.id)
+        assertTrue(before.all { id -> cells.first { it.id == id }.status == CellStatus.DONE })
+        assertTrue("a cell was re-planned from the changed settings", cells.none { it.label == "Your current settings" && it.attempt == 0 && it.id !in before && it.stage == "CUR" })
+        val bases = cells.filter { it.stage == "BASE" }.map { it.argvSig }.toSet()
+        assertEquals(1, bases.size)
     }
 
     @Test fun stoppingKeepsTheFinishedCellsAndResumeCompletes() = runBlocking {

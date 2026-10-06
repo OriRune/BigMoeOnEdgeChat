@@ -67,7 +67,14 @@ class ScanExecutor(
         var run = run0
         scan.resetRunningCells(run.id)
         val size = File(run.modelPath).length()
-        val current = host.scanCurrentSettings(run.modelPath)
+        val current = if (run.currentJson.isNotEmpty()) {
+            SettingsJson.fromJson(run.currentJson)
+        } else {
+            host.scanCurrentSettings(run.modelPath).also {
+                run = run.copy(currentJson = SettingsJson.toJson(it))
+                scan.updateRun(run)
+            }
+        }
         val input = PlanInput(current, size, host.ramBytes(), run.includeLossy, run.includeSustained)
         val model = File(run.modelPath).nameWithoutExtension.take(30)
         try {

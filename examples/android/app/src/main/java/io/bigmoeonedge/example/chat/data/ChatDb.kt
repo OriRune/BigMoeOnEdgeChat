@@ -17,7 +17,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         ScanCellEntity::class,
         ModelProfileEntity::class,
     ],
-    version = 2,
+    version = 3,
     exportSchema = true,
 )
 abstract class ChatDb : RoomDatabase() {
@@ -37,7 +37,7 @@ abstract class ChatDb : RoomDatabase() {
          */
         fun get(ctx: Context): ChatDb = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(ctx.applicationContext, ChatDb::class.java, "chat.db")
-                .addMigrations(MIGRATION_1_2)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                 .enableMultiInstanceInvalidation()
                 .build()
                 .also { instance = it }

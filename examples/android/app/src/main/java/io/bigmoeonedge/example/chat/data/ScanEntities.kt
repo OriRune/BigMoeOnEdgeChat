@@ -53,6 +53,9 @@ data class ScanRunEntity(
     val recommendedLabel: String = "",
     val verdict: String = "",
     val confirmed: Boolean = false,
+    // The settings the scan started from (AppSettings JSON). Cell identities derive from them, so a resumed
+    // scan must not recompute them from whatever the global settings are by then.
+    val currentJson: String = "",
 )
 
 @Entity(

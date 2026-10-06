@@ -147,7 +147,9 @@ warnings for cells that started warm, did not fully cool, were throttled, used b
 charging or failed. **Use for chats with this model** saves the settings as that model's profile
 (the thread's top bar says *Scan-tuned settings*, and the thread menu resets it). **Export CSV**
 shares the cells and the raw samples. A stopped or killed scan keeps its finished cells and resumes
-at the first unfinished one; a cell that was running is run again.
+at the first unfinished one; a cell that was running is run again. The settings a scan started from
+are stored with the run, so changing the global settings while it is paused does not change its
+baseline or make it repeat finished cells.
 
 ## Queue semantics
 

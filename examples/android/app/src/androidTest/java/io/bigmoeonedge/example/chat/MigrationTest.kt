@@ -5,6 +5,7 @@ import androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
 import androidx.test.platform.app.InstrumentationRegistry
 import io.bigmoeonedge.example.chat.data.ChatDb
 import io.bigmoeonedge.example.chat.data.MIGRATION_1_2
+import io.bigmoeonedge.example.chat.data.MIGRATION_2_3
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -42,6 +43,24 @@ class MigrationTest {
                 c.moveToFirst()
                 assertEquals(0, c.getInt(0))
             }
+        }
+    }
+
+    @Test fun aScanRunFromVersion2GainsAnEmptyBaseline() {
+        helper.createDatabase("mig2", 2).apply {
+            execSQL(
+                "INSERT INTO scan_runs (modelPath, startedAt, status, includeLossy, includeSustained, sustainedMinutes, " +
+                    "referenceHeadroom, referenceThermal, referenceBatteryC, referenceMemAvailMb, startedWarm, stage, detail, " +
+                    "note, recommendedJson, recommendedLabel, verdict, confirmed) " +
+                    "VALUES ('/m.gguf', 1, 'STOPPED', 0, 1, 12, -1.0, 0, -1.0, 0, 0, '', '', '', '', '', '', 0)",
+            )
+            close()
+        }
+        val db = helper.runMigrationsAndValidate("mig2", 3, true, MIGRATION_2_3)
+        db.query("SELECT status, currentJson FROM scan_runs").use { c ->
+            c.moveToFirst()
+            assertEquals("STOPPED", c.getString(0))
+            assertEquals("", c.getString(1))
         }
     }
 }
