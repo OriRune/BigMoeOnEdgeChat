@@ -126,7 +126,8 @@ memory are back at the reference, polling every 15 s and giving up after 10 minu
 the cell). A fixed sleep would turn the matrix into a measurement of run order
 (`docs/benchmark-method.md`). A cell that reaches thermal status SEVERE is cancelled and re-run
 after cooling, and a burst cell that was throttled for more than a quarter of its run is re-run once
-and, if it still was, compared on its cool-only speed. The phone is never pushed past SEVERE, and
+(only if the phone had cooled at its start; after a gate that gave up the second attempt would start
+warm too) and, if it still was, compared on its cool-only speed. The phone is never pushed past SEVERE, and
 the scan pauses below 20% battery when not charging.
 
 **Lossless first.** The default scan changes only settings that do not change the text. *Include

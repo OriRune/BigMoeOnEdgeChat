@@ -30,6 +30,8 @@ data class ScanTiming(
     val gatePollMs: Long = 15_000L,
     val gateMaxMs: Long = 10 * 60_000L,
     val nPredict: Int = 256,
+    // A load that has not finished by then is thrashing (swap full of other apps) and is recorded as failed.
+    val loadTimeoutMs: Long = 45 * 60_000L,
     // Overrides the run's sustained minutes (tests and the fast fake mode).
     val sustainedMs: Long? = null,
 )
@@ -183,7 +185,8 @@ class ScanExecutor(
         var totalTokens = 0
         var text = ""
         try {
-            val ready = s.awaitReady()
+            val ready = withTimeoutOrNull(timing.loadTimeoutMs) { s.awaitReady() }
+                ?: throw SessionFailed("The model did not finish loading in ${timing.loadTimeoutMs / 60_000} minutes (memory pressure?).")
             val (cpuset, cores) = host.cpusetOf(s.backend.pid)
             result = result.copy(
                 nExpertUsed = ready.nExpertUsed ?: 0, loadS = ready.loadS, cpuset = cpuset, cpusAllowed = cores,
@@ -375,7 +378,7 @@ class ScanExecutor(
         stage = c.stage, kind = c.kind, label = c.label, key = c.argvSig, status = c.status, attempt = c.attempt,
         decodeMedianTokS = c.decodeMedianTokS, coolMedianTokS = c.coolMedianTokS, sustainedTokS = c.sustainedTokS,
         throttledFrac = c.throttledFrac, peakAnonMb = c.peakAnonMb, cacheResidentMib = c.cacheResidentMib,
-        cpusAllowed = c.cpusAllowed, nExpertUsed = c.nExpertUsed,
+        cpusAllowed = c.cpusAllowed, nExpertUsed = c.nExpertUsed, gateGaveUp = c.gateGaveUp,
     )
 
     private fun mmss(ms: Long): String {

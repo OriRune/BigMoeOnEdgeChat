@@ -92,7 +92,8 @@ class ChatActivity : ComponentActivity() {
         // Work is waiting but the engine process is gone (killed, or the phone restarted).
         lifecycleScope.launch(Dispatchers.IO) {
             val db = ChatServices.db(this@ChatActivity)
-            val waiting = db.messages().queued().isNotEmpty() || db.messages().active().isNotEmpty()
+            val waiting = db.messages().queued().isNotEmpty() || db.messages().active().isNotEmpty() ||
+                db.scan().runningRun() != null
             if (waiting && !EngineLiveness.isAlive(this@ChatActivity)) client.kick()
         }
     }

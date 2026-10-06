@@ -21,6 +21,7 @@ data class PCell(
     val cacheResidentMib: Double = -1.0,
     val cpusAllowed: Int = 0,
     val nExpertUsed: Int = 0,
+    val gateGaveUp: Boolean = false,
 )
 
 /** A cell the planner wants run. [attempt] > 0 is a re-run (thermal contamination or an abort). */
@@ -99,7 +100,11 @@ object ScanPlanner {
             CellStatus.THERMAL_ABORT ->
                 if (mine.size < MAX_ATTEMPTS) Res.Need(spec.copy(attempt = mine.size)) else Res.Have(last)
             CellStatus.DONE ->
-                if (spec.kind != CellKind.SUSTAINED && last.throttledFrac > CONTAMINATED_FRAC && mine.size < MAX_ATTEMPTS) {
+                // A re-run only helps when the phone was cool at the start: if the gate gave up, the second
+                // attempt would start from the same warm state.
+                if (spec.kind != CellKind.SUSTAINED && last.throttledFrac > CONTAMINATED_FRAC && !last.gateGaveUp &&
+                    mine.size < MAX_ATTEMPTS
+                ) {
                     Res.Need(spec.copy(attempt = mine.size))
                 } else Res.Have(last)
             else -> Res.Have(last) // FAILED is data

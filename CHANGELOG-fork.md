@@ -19,6 +19,9 @@ changes offered back upstream go there instead, per `AGENTS.md`.
 
 ### Changed
 - `EngineSession` is shared by the chat job loop and the scan executor.
+- Scan: a model load that takes over 45 minutes (thrashing swap) is recorded as failed, a burst cell
+  is not re-run after a cooldown gate that gave up (the second attempt would start warm too), and
+  opening the app kicks a scan that is marked running.
 
 ## [0.28.0-chat.5] - 2026-10-04
 

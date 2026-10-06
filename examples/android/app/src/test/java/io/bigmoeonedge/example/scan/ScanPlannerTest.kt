@@ -126,6 +126,25 @@ class ScanPlannerTest {
         assertEquals(listOf(0, 1), c2.map { it.attempt })
     }
 
+    @Test fun aCellWhoseGateGaveUpIsNotRerunBecauseTheSecondAttemptStartsWarmToo() {
+        val sim = Sim(input(), throttled = { if (it.stage == "C" && it.settings.threads == 2) 0.5 else 0.0 })
+        // The same cell, but the gate gave up before it: no second attempt.
+        val real = sim::cellFor
+        repeat(200) {
+            when (val s = ScanPlanner.next(sim.inp, sim.cells)) {
+                is PlanStep.Finished -> {
+                    assertEquals(listOf(0), sim.ran.filter { it.stage == "C" && it.settings.threads == 2 }.map { it.attempt })
+                    return
+                }
+                is PlanStep.Run -> {
+                    sim.ran += s.spec
+                    sim.cells += real(s.spec).copy(gateGaveUp = true)
+                }
+            }
+        }
+        error("no end")
+    }
+
     @Test fun aCellThatStaysContaminatedIsComparedOnItsCoolSpeed() {
         // Both attempts hot; the planner stops after two and scores the cool-only median.
         val cells = mutableListOf<PCell>()

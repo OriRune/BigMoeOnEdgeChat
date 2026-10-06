@@ -77,16 +77,21 @@ class ScanExecutorTest {
         assertEquals(1, finished.size)
         val cells = db.scan().cells(run.id)
         val stages = cells.map { it.stage }.distinct()
-        for (st in listOf("BASE", "A", "B", "C", "S", "H")) assertTrue("missing stage $st in $stages", st in stages)
+        // B, D, E and F only run while streaming is the incumbent, which the fake's noise can flip.
+        for (st in listOf("BASE", "A", "C", "S", "H")) assertTrue("missing stage $st in $stages", st in stages)
         assertTrue(cells.none { it.status == CellStatus.PENDING || it.status == CellStatus.RUNNING })
         val burst = cells.first { it.stage == "BASE" }
         assertEquals(CellStatus.DONE, burst.status)
         assertTrue(burst.decodeMedianTokS > 0 && burst.tokens > 0)
         assertTrue(burst.samplesJson.length > 2)
         assertTrue(cells.first { it.stage == "S" }.sustainedTokS > 0)
-        // The fake phone heats while generating, so burst cells are thermally contaminated and re-run once.
-        assertTrue("no cell was re-run", cells.any { it.attempt == 1 })
+        // The fake phone heats while generating, so burst cells are contaminated; they are re-run once, but
+        // only when the gate had not given up (a re-run from the same warm state would measure the same).
         assertTrue(cells.none { it.attempt > 1 })
+        for (rerun in cells.filter { it.attempt == 1 }) {
+            val first = cells.first { it.argvSig == rerun.argvSig && it.attempt == 0 }
+            assertTrue("re-ran ${rerun.label} after the gate gave up", !first.gateGaveUp)
+        }
         // The reference state was taken before the first cell.
         assertTrue(r.referenceMemAvailMb > 0)
     }
