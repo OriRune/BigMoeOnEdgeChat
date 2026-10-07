@@ -498,10 +498,12 @@ Requests (stdin):
 
 ```
 {"cmd":"generate","id":<int>,"prompt":"<string>","n_predict":<int>,"think":<bool>,"clear_kv":<bool>,
- "history_roles":["<string>",...],"history_contents":["<string>",...],"fit_ctx":<bool>}
+ "history_roles":["<string>",...],"history_contents":["<string>",...],"fit_ctx":<bool>,
+ "think_budget":<int>}
 {"cmd":"decide","id":<int>,"prefix":"<string>","suffix":"<string>","choices":["<string>",...],
  "reuse_prefix":<bool>}   # needs --decide; always rendered with reasoning off; see decide.md
 {"cmd":"cancel"}          # interrupt the in-flight generation; the session stays loaded
+{"cmd":"end_thinking"}    # end the in-flight generation's reasoning now and let the model answer
 {"cmd":"close"}           # end the session (EOF on stdin does the same)
 ```
 
@@ -519,6 +521,13 @@ one; the KV is kept unless `clear_kv:true`. Arrays of unequal length (or roles w
 an unknown role, and a history without `--chatml` are each a `BMOE_ERROR` with `fatal:false`.
 `fit_ctx:true` drops the oldest exchanges that do not fit `n_ctx` instead of refusing the request;
 the count is `history_dropped` on `BMOE_DONE`. All three keys are optional.
+
+`think_budget` (with `think:true`, optional, default `-1` = no limit) caps the tokens the model may
+spend inside its reasoning span: when the span has run that long the engine writes the span's closing
+tag itself and the model answers from there. `end_thinking` makes the same cut on demand, like `cancel`
+at any time, and does nothing once the span has closed. The markers come from the model's rendered chat
+template, so any model whose template declares a span is covered, and one that declares none is left
+alone. `n_predict` counts every generated token, reasoning included, so send `budget + answer length`.
 
 Responses (stdout):
 
@@ -538,7 +547,8 @@ BMOE_DONE  {"id":<int>,"cancelled":<bool>,"tokens":<int>,"tok_s":<float>,
             "prefill_dev_stall_s":<float>,
             "token_demand_mib":<float>,"mtp_drafted":<int>,"mtp_accepted":<int>,"mtp_decodes":<int>,
             "mtp_draft_s_tok":<float>,"drafted_steps":<int>,"loop_overhead_s_tok":<float>,
-            "reasoning":"<string>","text":"<string>","history_dropped":<int>}
+            "reasoning":"<string>","text":"<string>","history_dropped":<int>,
+            "thinking_cut":<bool>,"thinking_tokens":<int>}
 BMOE_DECIDE {"id":<int>,"cancelled":<bool>,"best":<int>,"choice_logp":[<float|null>,...],
              "n_tokens":<int>,"n_reused":<int>,"n_prefilled":<int>,"restore_s":<float>,
              "store_s":<float>,"prefill_s":<float>,"prefill_cpu_s":<float>,"prefill_read_mib":<float>,
@@ -620,7 +630,9 @@ AVERAGES over the run (so a UI can show an average compute-vs-I/O split, not jus
 total flash streamed this generation, and `stall_s_tok`/`mgmt_s_tok` the per-token overlap stall and
 cache-management cost. `text` is the final answer and `reasoning` the final thinking span (empty
 unless the model reasoned), same split as the per-token lines. `history_dropped` is the number of
-messages `fit_ctx` removed from the front of the conversation (0 without it); it is the last key. `BMOE_ERROR` with `fatal:false` is a rejected
+messages `fit_ctx` removed from the front of the conversation (0 without it). `thinking_cut` is true when
+the engine ended the reasoning (`think_budget` or `end_thinking`) rather than the model, and
+`thinking_tokens` the tokens the span held; `thinking_tokens` is the last key. `BMOE_ERROR` with `fatal:false` is a rejected
 request (e.g. the prompt plus `n_predict` exceeds `n_ctx`) and leaves the session usable;
 `fatal:true` means the process is ending.
 

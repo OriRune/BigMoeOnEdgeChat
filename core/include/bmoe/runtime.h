@@ -34,6 +34,10 @@ struct RunResult {
     // Messages fit_ctx removed from the front of the conversation to make this turn fit n_ctx
     // (GenerateRequest::fit_ctx). 0 when nothing was dropped.
     int history_dropped = 0;
+    // The reasoning span was ended by the engine (GenerateRequest::think_budget or Session::end_thinking)
+    // rather than by the model, and how many tokens the span held.
+    bool thinking_cut = false;
+    int thinking_tokens = 0;
     explicit operator bool() const { return ok; }
 };
 

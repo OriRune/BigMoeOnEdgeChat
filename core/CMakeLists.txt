@@ -42,6 +42,7 @@ if(BMOE_HAVE_LLAMA)
         src/engine/decide/llama_backend.cpp
         src/engine/chat_parse.cpp
         src/engine/thinking_control.cpp
+        src/engine/think_budget.cpp
         src/engine/runtime.cpp
         src/metrics/csv_metrics_sink.cpp
         src/metrics/route_trace_sink.cpp

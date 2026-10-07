@@ -97,6 +97,12 @@ struct GenerateRequest {
     std::string prompt;
     int n_predict = 32;
     bool think = true;
+    // With think on: at most this many tokens inside the model's reasoning span. When the span has run
+    // that long the engine writes the span's closing tag itself and the model answers from there, so a
+    // slow model cannot spend a whole reply budget thinking. n_predict still counts every token,
+    // reasoning included, so size it as budget + answer. -1 = no limit. Ignored with think off or on a
+    // model whose template declares no span.
+    int think_budget = -1;
     bool clear_kv = true;
     // Populate TokenMetrics::text / ::reasoning on every token. Building them means parsing the
     // WHOLE generation so far — the chat parser cannot resume — so it is O(n) per token and O(n²)
@@ -208,6 +214,11 @@ public:
     // thread while generate() runs. Takes effect at the next decode boundary via the abort
     // callback and leaves the model/cache intact for the next generate().
     void cancel();
+
+    // Ask the in-flight generation to end its reasoning now and answer: the same cut think_budget
+    // makes, on demand. Thread-safe like cancel(). Takes effect at the next token; does nothing once
+    // the span has closed, or on a request that is not thinking. Cleared at the start of every generate().
+    void end_thinking();
 
     double load_seconds() const;      // model load + streaming setup, measured once at open()
     const std::string & arch() const; // model architecture ("qwen3moe", "gemma4", …)

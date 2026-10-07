@@ -5,6 +5,7 @@
 #include "bmoe/version.h"
 #include "bmoe/ngram_draft.h"
 #include "chat_parse.h"
+#include "think_budget.h"
 #include "decide/decider.h"
 #include "decide/llama_backend.h"
 #include "logits.h"
@@ -353,6 +354,7 @@ struct Session::Impl {
     bool info_sent = false;
 
     std::atomic<bool> cancel_requested{false};
+    std::atomic<bool> end_thinking_requested{false};
 
     ~Impl() {
         // Deterministic teardown order: stop the I/O pool (it holds fds into the mmap and its
@@ -623,6 +625,10 @@ DecideResult Session::decide(const DecideRequest & req) {
 
 void Session::cancel() {
     impl_->cancel_requested.store(true, std::memory_order_relaxed);
+}
+
+void Session::end_thinking() {
+    impl_->end_thinking_requested.store(true, std::memory_order_relaxed);
 }
 
 std::unique_ptr<Session> Session::open(const SessionConfig & cfg,
@@ -1274,6 +1280,7 @@ RunResult Session::generate(const GenerateRequest & req,
     // Fresh cancel latch for this generation; a stale request from a prior aborted call must
     // not carry over. (cancel() sets it; the abort callback reads it.)
     im.cancel_requested.store(false, std::memory_order_relaxed);
+    im.end_thinking_requested.store(false, std::memory_order_relaxed);
 
     // A kept decide() prefix is worth its RAM only while decisions follow one another. Back in a
     // conversation it would sit, until close, in the memory the expert cache lives in, so it goes
@@ -1335,6 +1342,7 @@ RunResult Session::generate(const GenerateRequest & req,
     bool history_pushed = false;   // did we append this turn's user message to chat_history?
     bool prefilled_answer = false; // closed the reasoning span in the prompt, so skip reasoning parse
     common_chat_parser_params parse_params;
+    detail::ThinkSpan think_span; // where this model's reasoning starts and ends, from the rendered template
     if (chat_on) {
         common_chat_msg user_msg;
         user_msg.role = "user";
@@ -1358,6 +1366,7 @@ RunResult Session::generate(const GenerateRequest & req,
                 common_chat_params cp = common_chat_templates_apply(im.chat_tmpls.get(), inputs);
                 prompt = cp.prompt;
                 parse_params = detail::build_parse_params(cp);
+                think_span = detail::think_span_from(cp);
             } catch (const std::exception & e) {
                 std::fprintf(stderr, "bmoe: chat template apply failed (%s); using raw prompt\n", e.what());
                 if (history_pushed) {
@@ -1683,6 +1692,33 @@ RunResult Session::generate(const GenerateRequest & req,
     // would have read.
     llama_token tok = im.smpl ? llama_sampler_sample(im.smpl, ctx, -1) : argmax(logits, im.n_vocab);
 
+    // The reasoning budget. Only with chat on, thinking requested, and a model whose template declares
+    // a span; anything else leaves the loop exactly as it was. The governor sees every emitted piece
+    // and, at each sampling point, may replace the sampled token with the span's closing tag, one
+    // token per step. The sampler chain here keeps no history (top-k/top-p/temp/dist), so a token
+    // it did not choose needs no accept().
+    detail::ThinkGovernor gov;
+    if (chat_on && req.think && !prefilled_answer && think_span.valid()) {
+        const std::string & end_tag = think_span.ends.front();
+        std::vector<llama_token> forced(end_tag.size() + 8);
+        int nf = llama_tokenize(im.vocab, end_tag.c_str(), (int) end_tag.size(), forced.data(), (int) forced.size(),
+                                /*add_special*/ false, /*parse_special*/ true);
+        if (nf < 0) {
+            forced.resize((size_t) -nf);
+            nf = llama_tokenize(im.vocab, end_tag.c_str(), (int) end_tag.size(), forced.data(), (int) forced.size(),
+                                false, true);
+        }
+        if (nf > 0) {
+            forced.resize((size_t) nf);
+            gov = detail::ThinkGovernor(think_span, std::move(forced), req.think_budget);
+        }
+    }
+    auto govern = [&] {
+        llama_token f;
+        if (gov.active() && gov.override_token(im.end_thinking_requested.load(std::memory_order_relaxed), f)) tok = f;
+    };
+    govern();
+
     while (n_gen < req.n_predict) {
         if (llama_vocab_is_eog(im.vocab, tok)) break;
 
@@ -1693,7 +1729,9 @@ RunResult Session::generate(const GenerateRequest & req,
         int n_draft = 0;
         double draft_s = 0.0;                       // this group's drafting + catch-up (see below)
         const int room = req.n_predict - n_gen - 1; // tokens still wanted after `tok` itself
-        if (spec_on && room > 0) {
+        // Nothing is drafted past a tag still being forced: the draft would be verified against the
+        // model's own continuation, not the tag.
+        if (spec_on && room > 0 && !gov.forcing()) {
             const auto d0 = clock_t_::now();
             const uint64_t db0 = moe.enabled ? im.source.stats().read_bytes : 0;
             im.draft_buf.clear();
@@ -1865,6 +1903,7 @@ RunResult Session::generate(const GenerateRequest & req,
             int np = llama_token_to_piece(im.vocab, out, piece, sizeof(piece), 0, true);
             std::string delta = np > 0 ? std::string(piece, np) : std::string();
             gen += delta;
+            if (gov.active()) gov.feed(delta);
             if (chat_on) im.kv_tokens.push_back(out); // this token is now in the KV
             if (spec_on) mtp_ctx.push_back(out);
             ++n_gen;
@@ -1903,6 +1942,7 @@ RunResult Session::generate(const GenerateRequest & req,
         const int32_t row = wide ? n_acc : -1;
         logits = llama_get_logits_ith(ctx, row);
         tok = im.smpl ? llama_sampler_sample(im.smpl, ctx, row) : argmax(logits, im.n_vocab);
+        govern();
     }
 
     // Speculation can leave the KV ahead of what the caller received: an accepted end-of-generation
@@ -2036,6 +2076,8 @@ RunResult Session::generate(const GenerateRequest & req,
             detail::warn_parse_failed_once(e.what());
         }
     }
+    res.thinking_cut = gov.cut();
+    res.thinking_tokens = gov.span_tokens();
     if (final_parsed) {
         res.generated_text = final_msg.content;
         res.reasoning_text = final_msg.reasoning_content;

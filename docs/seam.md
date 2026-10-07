@@ -114,6 +114,13 @@ trailing assistant message, makes llama.cpp's own per-template handler emit that
 is over" span into the prompt. This is why no `<think>` or harmony channel marker appears anywhere in
 `core/` — the markers stay upstream, where a submodule bump keeps them current.
 
+`think_budget.cpp` reads the same data (`thinking_start_tag`, `thinking_end_tags`, and the
+generation prompt, to tell whether the prompt already opened the span) to cap how long a model may
+reason: the closing tag the template declares is tokenized and forced at the sampling point. It does
+not use llama.cpp's own reasoning-budget sampler, which lives in `common` and is wired to a server's
+sampler setup; the governor is a few lines of policy over the public sampling loop the engine already
+owns, and is unit-tested without a model (`tests/think_budget_test.cpp`).
+
 Whether the continuation is *binding* is read off `common_chat_params::thinking_start_tag`/
 `thinking_end_tag`: a model that declares a reasoning span owns it, so a pre-closed empty one is a
 suggestion it can decline (LFM2.5 does), while a model that declares none separates reasoning
@@ -150,7 +157,7 @@ Unlike the public-C-API streaming seam, `common` is **not a stable API** — it 
 between upstream versions. So a submodule bump may require updating this chat glue in
 `session.cpp` / `chat_parse.cpp` / `thinking_control.cpp`; the build and gates catch a break at
 compile time rather than at runtime (`tests/chat_parse_test.cpp` and
-`tests/think_control_test.cpp` cover these seams directly). This
+`tests/think_control_test.cpp` and `tests/think_budget_test.cpp` cover these seams directly). This
 trade-off is deliberate and is also noted at the link site in the root `CMakeLists.txt`. The
 gates themselves run with the template off (raw prompt), so they stay deterministic and are
 unaffected by this dependency.

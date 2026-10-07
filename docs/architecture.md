@@ -36,6 +36,8 @@ core/
                 runtime — the one-shot run() wrapper over a Session
                 chat_parse — reasoning-parser wiring (llama.cpp `common`, see seam.md)
                 thinking_control — how "thinking off" is honoured, probed per model
+                think_budget — the reasoning-span budget: a pure governor that forces the span's
+                  closing tag after N tokens or on request
                 logits, prefill_support — log-softmax, batch filling and prefill attribution,
                   shared by generate / perplexity / decide
                 decide/ — Session::decide() (see decide.md): pure policy over an IDecideBackend

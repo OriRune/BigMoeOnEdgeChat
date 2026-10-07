@@ -92,6 +92,24 @@ true`. In chat mode a cancel **rolls the turn back** to the reused prefix (dropp
 and un-appending the user message) so prior turns stay usable and the conversation can continue.
 Cancel is distinct from a fatal streaming error, which is sticky and ends the session.
 
+## Thinking budget
+
+A reasoning model can spend a whole reply budget inside its reasoning and never answer, and the common
+templates (Qwen3.x, Gemma 4) read only an on/off flag, so there is no "low effort" to request.
+`GenerateRequest::think_budget` therefore limits the tokens inside the model's reasoning span: when it
+has run that long the engine forces the span's closing tag and the model continues past it, into its
+answer. `Session::end_thinking()` makes the same cut at once (thread-safe, like `cancel()`; it is
+cleared at the start of every `generate()`, and does nothing once the span has closed). The result
+reports `RunResult::thinking_cut` and `thinking_tokens`, and the answer is committed to the history
+with the shortened reasoning like any other turn.
+
+`n_predict` counts every generated token, reasoning included, so a caller that wants an answer of up to
+A tokens after at most T tokens of thinking sends `n_predict = T + A`. The cut waits for the end of a
+multi-byte character, and speculative drafting pauses while the tag is written, so the tag itself is
+never drafted past; a group of drafts already in flight can overshoot the budget by up to
+`draft_max` tokens. With think off, with no budget and no request, or on a model whose template
+declares no reasoning span, nothing changes.
+
 ## Fixed context
 
 `n_ctx` and `n_batch` are baked into the llama context at `open()`, before any prompt is known, so

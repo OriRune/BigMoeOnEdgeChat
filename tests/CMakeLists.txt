@@ -36,6 +36,16 @@ target_compile_definitions(bmoe_think_control_test PRIVATE
     BMOE_TMPL_GEMMA4="${_tmpl_dir}/google-gemma-4-31B-it.jinja")
 add_test(NAME think_control COMMAND bmoe_think_control_test)
 
+# Thinking budget: the governor's policy (pure) and span detection against real vendored templates.
+add_executable(bmoe_think_budget_test think_budget_test.cpp)
+target_link_libraries(bmoe_think_budget_test PRIVATE bmoe_core)
+target_include_directories(bmoe_think_budget_test PRIVATE ${CMAKE_SOURCE_DIR}/core/src/engine)
+target_compile_definitions(bmoe_think_budget_test PRIVATE
+    BMOE_TMPL_QWEN3="${_tmpl_dir}/Qwen3.5-4B.jinja"
+    BMOE_TMPL_GEMMA4="${_tmpl_dir}/google-gemma-4-31B-it.jinja"
+    BMOE_TMPL_LFM2="${_tmpl_dir}/LFM2-8B-A1B.jinja")
+add_test(NAME think_budget COMMAND bmoe_think_budget_test)
+
 # validate() unit tests (issue #51 + the pre-existing rules). Pure config, no model — runs
 # unconditionally, and makes good on config.h's "unit-tested" claim.
 add_executable(bmoe_config_test config_test.cpp)
