@@ -61,6 +61,9 @@ class EngineRunnerTest {
 
     @After fun close() {
         runner.shutdown()
+        // The runner's last status writes land after a reply's final status; closing under them crashes the
+        // whole instrumentation process, so let them finish.
+        runBlocking { delay(400) }
         db.close()
     }
 
@@ -99,6 +102,7 @@ class EngineRunnerTest {
         runner.start()
         repo.send(c, "think hard [thinklong]")
         until("the reply") { replies(c).singleOrNull()?.status == MessageStatus.DONE }
+        until("the callback") { finished.size == 1 }
         val r = replies(c).single()
         assertTrue(r.thinkingCut)
         assertEquals(ThinkLevel.LOW.tokens, r.thinkingTokens)
@@ -113,6 +117,7 @@ class EngineRunnerTest {
         until("it is thinking") { replies(c).singleOrNull()?.reasoning?.isNotEmpty() == true }
         runner.endThinking(replies(c).single().id)
         until("the reply") { replies(c).single().status == MessageStatus.DONE }
+        until("the callback") { finished.size == 1 }
         val r = replies(c).single()
         assertTrue(r.thinkingCut)
         assertTrue("cut well before the budget", r.thinkingTokens in 1 until 600)
@@ -124,6 +129,7 @@ class EngineRunnerTest {
         runner.start()
         repo.send(c, "quick")
         until("the reply") { replies(c).singleOrNull()?.status == MessageStatus.DONE }
+        until("the callback") { finished.size == 1 }
         assertEquals(false, replies(c).single().thinkingCut)
     }
 

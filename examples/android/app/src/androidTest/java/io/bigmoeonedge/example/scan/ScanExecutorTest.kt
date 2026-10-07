@@ -4,6 +4,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import io.bigmoeonedge.example.chat.data.CellStatus
 import io.bigmoeonedge.example.chat.data.ChatDb
 import io.bigmoeonedge.example.chat.data.ConversationEntity
+import io.bigmoeonedge.example.chat.data.ScanPhase
 import io.bigmoeonedge.example.chat.data.ScanRunEntity
 import io.bigmoeonedge.example.chat.data.ScanRunStatus
 import io.bigmoeonedge.example.chat.engine.EngineBackend
@@ -31,10 +32,14 @@ class ScanExecutorTest {
     // What "your current settings" are today; a test changes it between a stop and a resume.
     private var currentThreads = 4
 
+    // A backend that loads and then says nothing: the first token is half an hour away.
+    @Volatile private var hang = false
+
     private val host = object : EngineHost {
         override suspend fun scanCurrentSettings(modelPath: String) = io.bigmoeonedge.example.AppSettings(threads = currentThreads)
         override suspend fun jobConfig(conv: ConversationEntity) = error("not used")
-        override fun createBackend(cfg: JobConfig): EngineBackend = FakeEngineBackend(loadMs = 50)
+        override fun createBackend(cfg: JobConfig): EngineBackend =
+            if (hang) FakeEngineBackend(tokPerSec = { 0.001 }, loadMs = 50) else FakeEngineBackend(loadMs = 50)
         override suspend fun clearOtherEngines(selfPid: Int) {}
         override fun foregroundText(text: String) {}
         override fun holdWake(on: Boolean) {}
@@ -172,5 +177,52 @@ class ScanExecutorTest {
         // Some cell had to wait at the gate (the fake phone heats while generating).
         assertTrue(cells.any { it.gateWaitS > 0.1 })
         assertFalse(cells.any { it.gateGaveUp })
+    }
+
+    @Test fun aRunningScanWritesAHeartbeatAndItsPhases() = runBlocking {
+        val run = newRun(sustained = false)
+        val job = CoroutineScope(Dispatchers.Default).launch { ScanExecutor(db, host, timing).run(run) }
+        val phases = linkedSetOf<String>()
+        var maxTokens = 0
+        var lastBeat = 0L
+        var beats = 0
+        withTimeout(120_000) {
+            while (job.isActive) {
+                val r = db.scan().run(run.id)!!
+                if (r.phase.isNotEmpty()) phases += r.phase
+                maxTokens = maxOf(maxTokens, r.liveTokens)
+                if (r.heartbeatAt != lastBeat) {
+                    beats++
+                    lastBeat = r.heartbeatAt
+                }
+                if (r.phase == ScanPhase.GENERATING) {
+                    assertTrue(r.phaseSince > 0 && r.liveTarget == timing.nPredict)
+                }
+                delay(15)
+            }
+        }
+        for (p in listOf(ScanPhase.REFERENCE, ScanPhase.LOADING, ScanPhase.GENERATING)) assertTrue("never saw $p in $phases", p in phases)
+        assertTrue("tokens were never reported", maxTokens > 0)
+        assertTrue("too few heartbeats: $beats", beats > 10)
+        val end = db.scan().run(run.id)!!
+        assertEquals(ScanRunStatus.DONE, end.status)
+        assertEquals("", end.phase)
+        // The progress screen's plan agrees with the executor: nothing is left.
+        val o = ScanProgress.outline(end, db.scan().cellsLite(run.id), 12L shl 30, System.currentTimeMillis())
+        assertTrue(o.finished)
+    }
+
+    @Test fun anEngineThatSaysNothingIsFailedInsteadOfWaitedOnForever() = runBlocking {
+        hang = true
+        val run = newRun(sustained = false)
+        withTimeout(120_000) { ScanExecutor(db, host, timing.copy(stallMs = 600)).run(run) }
+        val cells = db.scan().cells(run.id)
+        val base = cells.first { it.stage == "BASE" }
+        assertEquals(CellStatus.FAILED, base.status)
+        assertTrue(base.error, base.error!!.contains("produced nothing"))
+        // With no baseline there is nothing to compare against: the scan ends, failed, and says why.
+        val r = db.scan().run(run.id)!!
+        assertEquals(ScanRunStatus.FAILED, r.status)
+        assertTrue(r.verdict.contains("baseline"))
     }
 }

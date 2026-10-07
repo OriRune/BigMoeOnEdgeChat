@@ -1,5 +1,6 @@
 package io.bigmoeonedge.example.scan
 
+import io.bigmoeonedge.example.chat.data.CellLite
 import io.bigmoeonedge.example.chat.data.ChatDb
 import io.bigmoeonedge.example.chat.data.ModelProfileEntity
 import io.bigmoeonedge.example.chat.data.ScanCellEntity
@@ -14,6 +15,7 @@ class ScanRepository(private val db: ChatDb, private val kick: () -> Unit, priva
     fun observeRuns(): Flow<List<ScanRunEntity>> = dao.observeRuns()
     fun observeRun(id: Long): Flow<ScanRunEntity?> = dao.observeRun(id)
     fun observeCells(id: Long): Flow<List<ScanCellEntity>> = dao.observeCells(id)
+    fun observeAllCellsLite(): Flow<List<CellLite>> = dao.observeAllCellsLite()
     fun observeProfile(path: String): Flow<ModelProfileEntity?> = dao.observeProfile(path)
 
     /** One run per model; they run back to back, oldest first. */
@@ -23,7 +25,7 @@ class ScanRepository(private val db: ChatDb, private val kick: () -> Unit, priva
             dao.insertRun(
                 ScanRunEntity(
                     modelPath = m, startedAt = now + i, includeSustained = sustained, includeLossy = lossy,
-                    sustainedMinutes = sustainedMinutes,
+                    sustainedMinutes = sustainedMinutes, heartbeatAt = now,
                 ),
             )
         }
@@ -49,7 +51,7 @@ class ScanRepository(private val db: ChatDb, private val kick: () -> Unit, priva
     suspend fun resume(id: Long) {
         val r = dao.run(id) ?: return
         if (r.status == ScanRunStatus.STOPPED || r.status == ScanRunStatus.FAILED) {
-            dao.updateRun(r.copy(status = ScanRunStatus.RUNNING, finishedAt = null, verdict = ""))
+            dao.updateRun(r.copy(status = ScanRunStatus.RUNNING, finishedAt = null, verdict = "", heartbeatAt = clock()))
             kick()
         }
     }

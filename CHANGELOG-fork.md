@@ -4,6 +4,26 @@ Changes that exist only in this fork of [Helldez/BigMoeOnEdge](https://github.co
 Upstream's `CHANGELOG.md` is left alone so that merging `upstream/main` stays conflict-free; engine
 changes offered back upstream go there instead, per `AGENTS.md`.
 
+## [0.28.0-chat.9] - 2026-10-06
+
+### Added
+- **A scan you can read.** The running scan's card shows *cell N of about M* with a progress bar and
+  the time left, the phase (cooling, loading, generating) with how long it has lasted, the model's
+  memory while loading, tokens and the current rate while generating, a *last update* line that turns
+  into *No progress for N min* with a **Restart scan** button when the executor goes quiet, and a
+  checklist of the stages with what each one found. Earlier scans show their date, duration, cell count
+  and outcome (and where a stopped one stopped). A scan's page gains a summary card, *How it went* and a
+  *Timeline* of every cell with its timings and errors. Everything is derived from the stored cells, so
+  the scans already on a phone read the same way.
+- Database version 5 (migration tested): the scan's live state (phase, heartbeat, tokens so far).
+
+### Changed
+- The scan executor writes a heartbeat from every loop, including the model load, which used to be
+  silent for as long as it took. An engine that produces nothing for 15 minutes is stopped and the cell
+  recorded as failed instead of being waited on for ever.
+- `ScanPlanner.next` is now the first unmeasured cell of `ScanPlanner.plan`, which also describes the
+  rest of the scan; the planner's behaviour is unchanged (its tests are).
+
 ## [0.28.0-chat.8] - 2026-10-06
 
 ### Added

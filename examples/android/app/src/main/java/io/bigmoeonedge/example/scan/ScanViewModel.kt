@@ -7,6 +7,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import io.bigmoeonedge.example.ModelManager
 import io.bigmoeonedge.example.chat.ChatServices
+import io.bigmoeonedge.example.chat.data.CellLite
+import io.bigmoeonedge.example.chat.data.CellStatus
 import io.bigmoeonedge.example.chat.data.ScanCellEntity
 import io.bigmoeonedge.example.chat.data.ScanRunEntity
 import io.bigmoeonedge.example.chat.data.ScanRunStatus
@@ -16,7 +18,10 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -46,12 +51,20 @@ class ScanViewModel(private val app: Application) : AndroidViewModel(app) {
     val engine: StateFlow<EngineStatusEntity?> = chatRepo.observeEngineStatus()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
-    /** The cells of the scan that is running now, for the live view. */
-    @OptIn(ExperimentalCoroutinesApi::class)
-    val liveCells: StateFlow<List<ScanCellEntity>> = runs
-        .map { r -> r.firstOrNull { it.status == ScanRunStatus.RUNNING }?.id }
-        .flatMapLatest { id -> if (id == null) flowOf(emptyList()) else repo.observeCells(id) }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    /**
+     * Where every scan stands, derived from its cells: the plan, how much is measured, the time left. Worked out
+     * off the main thread on every change (the running scan writes a heartbeat every few seconds).
+     */
+    val outlines: StateFlow<Map<Long, Outline>> = combine(runs, repo.observeAllCellsLite()) { rs, all ->
+        val by = all.groupBy { it.runId }
+        val now = System.currentTimeMillis()
+        rs.associate { r -> r.id to ScanProgress.outline(r, by[r.id].orEmpty(), ramBytes, now) }
+    }.flowOn(Dispatchers.Default).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
+    /** The cell being measured right now, for each running scan. */
+    val currentCells: StateFlow<Map<Long, CellLite>> = repo.observeAllCellsLite()
+        .map { all -> all.filter { it.status == CellStatus.RUNNING }.associateBy { it.runId } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
 
     init {
         viewModelScope.launch { models.value = withContext(Dispatchers.IO) { ModelManager.listMoeModels(app) } }
@@ -91,6 +104,19 @@ class ScanViewModel(private val app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { repo.resume(id) }
     }
 
+    /**
+     * For a scan that has gone quiet: stop it, give the engine process a moment to let go, and resume. If the
+     * process had died, the stop starts it and the resume gives it the work.
+     */
+    fun restart(id: Long) {
+        viewModelScope.launch {
+            repo.stopAll()
+            ChatServices.client(app).scanStop()
+            delay(3_000)
+            repo.resume(id)
+        }
+    }
+
     fun delete(id: Long) {
         viewModelScope.launch { repo.delete(id) }
     }
@@ -99,9 +125,20 @@ class ScanViewModel(private val app: Application) : AndroidViewModel(app) {
 class ScanResultsViewModel(private val app: Application, val runId: Long) : AndroidViewModel(app) {
     private val repo = ChatServices.scan(app)
 
+    val ramBytes: Long = run {
+        val mi = ActivityManager.MemoryInfo()
+        (app.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager).getMemoryInfo(mi)
+        mi.totalMem
+    }
+
     val run: StateFlow<ScanRunEntity?> = repo.observeRun(runId).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
     val cells: StateFlow<List<ScanCellEntity>> = repo.observeCells(runId)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** The plan of this scan: what each stage decided, and what was never reached. */
+    val outline: StateFlow<Outline?> = combine(run, cells) { r, cs ->
+        r?.let { ScanProgress.outline(it, cs.map(ScanCellEntity::lite), ramBytes, System.currentTimeMillis()) }
+    }.flowOn(Dispatchers.Default).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     @OptIn(ExperimentalCoroutinesApi::class)
     val profileSource: StateFlow<String?> = run.flatMapLatest { r ->

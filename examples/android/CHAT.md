@@ -164,6 +164,35 @@ at the first unfinished one; a cell that was running is run again. The settings 
 are stored with the run, so changing the global settings while it is paused does not change its
 baseline or make it repeat finished cells.
 
+**Watching a scan.** While it runs the Scan screen shows one card that answers "is it working, and how
+far is it":
+- *Cell 9 of about 24* with a progress bar and the time left. The plan (`ScanPlanner.plan`) is the same
+  code that picks the next cell, so the count is exact up to the first unmeasured cell and a projection
+  after it, which assumes nothing wins from here; the confirmation cells (4) only join once a setting
+  has won, which the card says ("+4 more if a setting wins"). The time left comes from how long this
+  run's cells of each kind have taken (burst, sustained, confirmation), with fallbacks before any has
+  finished.
+- The phase: *Cooling › Loading › Generating* with the time spent in it. Loading shows how much of the
+  model is in memory, which tells a slow load from a hung one; generating shows the tokens so far
+  against the target (or the elapsed time of a sustained cell) and the rate over the last half minute.
+- *Active · updated 3 s ago*: the executor writes a heartbeat every few seconds from every loop it
+  runs (settling, cooling, loading, generating). When it has been silent for two minutes the card says
+  *No progress for N min* and offers **Restart scan**, which stops it, waits for the engine process to
+  let go and resumes (a dead process is started by the stop). An engine that is alive but produces
+  nothing for 15 minutes is stopped by the scan itself and the cell is recorded as failed, so a hung
+  child cannot stall it for ever.
+- A checklist of the stages (✓ done, ▶ now, ○ waiting, – not applicable to this model), each with what
+  it found: *C · Threads: kept the baseline (best alternative +4%, needs +5%)*, *B · Expert cache:
+  cache 3000 MiB won (+6%)*.
+
+**History.** *Earlier scans* lists each run with its date, how long it took, how many cells it measured
+and its outcome, and for a stopped or failed one the cell it stopped at. A scan's page opens with a
+summary (status, start time, duration, the recommendation and its gain over the baseline, how many
+cells have warnings), then *How it went* (the same checklist, final), a *Timeline* of every cell in
+the order it ran (start time, how long it took, how long it waited to cool, load time, result and, for
+a failed cell, the error) and finally the sorted measurement tables. Both are derived from the stored
+cells, so scans made before this existed read the same way.
+
 ## Queue semantics
 
 - Sending is never blocked. A message always lands in the conversation; if the conversation already

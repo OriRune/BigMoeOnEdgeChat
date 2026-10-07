@@ -203,6 +203,20 @@ interface ScanDao {
     @androidx.room.Update
     suspend fun updateRun(r: ScanRunEntity)
 
+    /**
+     * The scan's live state, as a targeted write: the executor's loops write it from several coroutines, and
+     * a whole-row update from a stale copy would undo what another one wrote.
+     */
+    @Query(
+        "UPDATE scan_runs SET stage = :stage, detail = :detail, phase = :phase, phaseSince = :since, " +
+            "heartbeatAt = :at, liveTokens = :tokens, liveTokS = :tokS, liveTarget = :target, phaseTotalMs = :totalMs " +
+            "WHERE id = :id",
+    )
+    suspend fun heartbeat(
+        id: Long, stage: String, detail: String, phase: String, since: Long, at: Long,
+        tokens: Int, tokS: Double, target: Int, totalMs: Long,
+    )
+
     @Query("SELECT * FROM scan_runs WHERE id = :id")
     suspend fun run(id: Long): ScanRunEntity?
 
@@ -236,6 +250,15 @@ interface ScanDao {
     @Query("SELECT * FROM scan_cells WHERE runId = :runId ORDER BY id")
     fun observeCells(runId: Long): Flow<List<ScanCellEntity>>
 
+    @Query("SELECT $LITE_COLUMNS FROM scan_cells WHERE runId = :runId ORDER BY id")
+    suspend fun cellsLite(runId: Long): List<CellLite>
+
+    @Query("SELECT $LITE_COLUMNS FROM scan_cells WHERE runId = :runId ORDER BY id")
+    fun observeCellsLite(runId: Long): Flow<List<CellLite>>
+
+    @Query("SELECT $LITE_COLUMNS FROM scan_cells ORDER BY runId, id")
+    fun observeAllCellsLite(): Flow<List<CellLite>>
+
     @Query("SELECT * FROM scan_cells WHERE id = :id")
     suspend fun cell(id: Long): ScanCellEntity?
 
@@ -255,3 +278,7 @@ interface ScanDao {
     @Query("DELETE FROM model_profiles WHERE modelPath = :path")
     suspend fun clearProfile(path: String)
 }
+
+private const val LITE_COLUMNS = "runId, stage, kind, label, argvSig, status, attempt, startedAt, finishedAt, " +
+    "decodeMedianTokS, coolMedianTokS, sustainedTokS, throttledFrac, peakAnonMb, cacheResidentMib, cpusAllowed, " +
+    "nExpertUsed, gateGaveUp, settingsJson"

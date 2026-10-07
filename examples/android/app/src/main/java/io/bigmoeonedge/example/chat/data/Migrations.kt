@@ -36,3 +36,16 @@ val MIGRATION_3_4 = object : Migration(3, 4) {
         db.execSQL("ALTER TABLE `messages` ADD COLUMN `thinkingTokens` INTEGER NOT NULL DEFAULT 0")
     }
 }
+
+/** Version 5 adds the scan's live state (phase, heartbeat, tokens so far) so the screen can show progress. */
+val MIGRATION_4_5 = object : Migration(4, 5) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `scan_runs` ADD COLUMN `phase` TEXT NOT NULL DEFAULT ''")
+        db.execSQL("ALTER TABLE `scan_runs` ADD COLUMN `phaseSince` INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE `scan_runs` ADD COLUMN `heartbeatAt` INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE `scan_runs` ADD COLUMN `liveTokens` INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE `scan_runs` ADD COLUMN `liveTokS` REAL NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE `scan_runs` ADD COLUMN `liveTarget` INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE `scan_runs` ADD COLUMN `phaseTotalMs` INTEGER NOT NULL DEFAULT 0")
+    }
+}

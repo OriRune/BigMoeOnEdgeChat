@@ -56,7 +56,25 @@ data class ScanRunEntity(
     // The settings the scan started from (AppSettings JSON). Cell identities derive from them, so a resumed
     // scan must not recompute them from whatever the global settings are by then.
     val currentJson: String = "",
+    // What the engine process is doing right now, written every few seconds by the scan so the screen can
+    // tell a working scan from a stalled one. [heartbeatAt] is the last write; [phase] is one of ScanPhase.
+    val phase: String = "",
+    val phaseSince: Long = 0,
+    val heartbeatAt: Long = 0,
+    // While generating: tokens so far (all requests of the cell), the rate over the last half minute, and
+    // either the token target (a burst cell) or the cell's length in ms (a sustained one).
+    val liveTokens: Int = 0,
+    val liveTokS: Double = 0.0,
+    val liveTarget: Int = 0,
+    val phaseTotalMs: Long = 0,
 )
+
+object ScanPhase {
+    const val REFERENCE = "REFERENCE"
+    const val COOLING = "COOLING"
+    const val LOADING = "LOADING"
+    const val GENERATING = "GENERATING"
+}
 
 @Entity(
     tableName = "scan_cells",
@@ -123,6 +141,32 @@ data class ScanCellEntity(
     val tokenMsJson: String = "[]",
     val tokenAtJson: String = "[]",
     val samplesJson: String = "[]",
+)
+
+/**
+ * A cell without its bulky columns (output text, per-token times, samples): what the planner, the
+ * progress estimate and the lists need, cheap enough to read for every run on every change.
+ */
+data class CellLite(
+    val runId: Long,
+    val stage: String,
+    val kind: String,
+    val label: String,
+    val argvSig: String,
+    val status: String,
+    val attempt: Int,
+    val startedAt: Long,
+    val finishedAt: Long?,
+    val decodeMedianTokS: Double,
+    val coolMedianTokS: Double,
+    val sustainedTokS: Double,
+    val throttledFrac: Double,
+    val peakAnonMb: Int,
+    val cacheResidentMib: Double,
+    val cpusAllowed: Int,
+    val nExpertUsed: Int,
+    val gateGaveUp: Boolean,
+    val settingsJson: String,
 )
 
 /** The settings chats use for one model: saved from a scan, or cleared to fall back to the global ones. */

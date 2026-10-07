@@ -25,6 +25,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -36,8 +37,13 @@ import io.bigmoeonedge.example.chat.ChatFormat
 import io.bigmoeonedge.example.chat.data.CellKind
 import io.bigmoeonedge.example.chat.data.CellStatus
 import io.bigmoeonedge.example.chat.data.ScanCellEntity
+import io.bigmoeonedge.example.chat.data.ScanRunEntity
 import io.bigmoeonedge.example.chat.data.ScanRunStatus
 import kotlinx.coroutines.launch
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 
 /** What is questionable about a cell, in a few words. Empty when nothing is. */
 fun cellWarnings(c: ScanCellEntity): List<String> = buildList {
@@ -85,8 +91,10 @@ fun ScanResultsScreen(vm: ScanResultsViewModel, onBack: () -> Unit) {
             if (r.startedWarm) {
                 Text("The phone was already warm when this scan started, so every figure is lower than it could be.", fontSize = 13.sp, color = MaterialTheme.colorScheme.error)
             }
+            val outline by vm.outline.collectAsStateWithLifecycle()
+            SummaryCard(r, cells, outline)
             when (r.status) {
-                ScanRunStatus.RUNNING -> Text(r.detail.ifEmpty { "Running…" }, fontSize = 14.sp)
+                ScanRunStatus.RUNNING -> Text(r.detail.substringBefore(" · ETA ").ifEmpty { "Running…" }, fontSize = 14.sp)
                 ScanRunStatus.STOPPED, ScanRunStatus.FAILED -> {
                     Text(r.verdict.ifEmpty { "Stopped." }, fontSize = 14.sp)
                     Button(onClick = vm::resume) { Text("Resume") }
@@ -105,8 +113,22 @@ fun ScanResultsScreen(vm: ScanResultsViewModel, onBack: () -> Unit) {
                     }
                 }
             }
+            outline?.let { o ->
+                Section("How it went")
+                val active = if (r.status == ScanRunStatus.DONE) null else o.currentStage?.stage
+                for (st in o.stages) {
+                    Text(
+                        "${st.stage} · ${st.title}: ${ScanProgress.stageLine(st, active)}", fontSize = 13.sp,
+                        color = if (st.cells.isEmpty() || (!st.isDone && r.status == ScanRunStatus.DONE)) MaterialTheme.colorScheme.onSurfaceVariant
+                        else MaterialTheme.colorScheme.onSurface,
+                    )
+                }
+            }
+            Section("Timeline")
+            Timeline(cells)
             OutlinedButton(onClick = { scope.launch { share(ctx, vm.exportCsv()) } }) { Text("Export CSV") }
 
+            Section("All measurements, fastest first")
             Section("Burst (cold start, 256 tokens)")
             for (c in burst) CellRow(c, onUse = null)
             if (sustained.isNotEmpty()) {
@@ -122,6 +144,72 @@ fun ScanResultsScreen(vm: ScanResultsViewModel, onBack: () -> Unit) {
                 Hint("Each row shows how much the text differs from the lossless baseline.")
                 for (c in lossy) CellRow(c, onUse = { vm.useCell(c) }, compareTo = base?.outputText)
             }
+        }
+    }
+}
+
+@Composable
+private fun SummaryCard(r: ScanRunEntity, cells: List<ScanCellEntity>, outline: Outline?) {
+    val fmt = remember { DateTimeFormatter.ofPattern("EEE MMM d, HH:mm", Locale.getDefault()) }
+    val started = Instant.ofEpochMilli(r.startedAt).atZone(ZoneId.systemDefault()).format(fmt)
+    val took = r.finishedAt?.let { ScanProgress.clock((it - r.startedAt).coerceAtLeast(0)) }
+    val gain = runCatching {
+        ScanProgress.gainOverBaselinePct(cells.map(ScanCellEntity::lite), r.recommendedJson.takeIf { it.isNotEmpty() }
+            ?.let { ScanPlanner.keyOf(SettingsJson.fromJson(it)) })
+    }.getOrNull()
+    val flagged = cells.count { cellWarnings(it).isNotEmpty() }
+    val sub = MaterialTheme.colorScheme.onSurfaceVariant
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(
+                when (r.status) {
+                    ScanRunStatus.DONE -> "Finished"
+                    ScanRunStatus.RUNNING -> "Running"
+                    ScanRunStatus.STOPPED -> "Stopped" + (outline?.let { " at cell ${it.currentOrdinal} of about ${it.totalCells}" } ?: "")
+                    else -> "Failed" + (outline?.let { " at cell ${it.currentOrdinal} of about ${it.totalCells}" } ?: "")
+                },
+                fontSize = 16.sp,
+            )
+            Text(
+                "Started $started" + (took?.let { " · ran for $it" } ?: "") + " · ${outline?.measuredCells ?: cells.size} cells measured",
+                fontSize = 13.sp, color = sub,
+            )
+            if (r.status == ScanRunStatus.DONE && r.recommendedLabel.isNotEmpty()) {
+                Text(
+                    "Recommended: ${r.recommendedLabel}" + (gain?.let { " (%+.0f%% over the baseline from cold)".format(it) } ?: ""),
+                    fontSize = 13.sp,
+                )
+            }
+            if (flagged > 0) Text("$flagged of ${cells.size} measurements have warnings; see the timeline.", fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
+        }
+    }
+}
+
+/** Every cell in the order it ran: when, how long, what it measured, and why it failed if it did. */
+@Composable
+private fun Timeline(cells: List<ScanCellEntity>) {
+    val fmt = remember { DateTimeFormatter.ofPattern("HH:mm", Locale.getDefault()) }
+    val sub = MaterialTheme.colorScheme.onSurfaceVariant
+    if (cells.isEmpty()) Hint("No cell has run yet.")
+    for (c in cells) {
+        val start = if (c.startedAt > 0) Instant.ofEpochMilli(c.startedAt).atZone(ZoneId.systemDefault()).format(fmt) else "—"
+        val total = c.finishedAt?.takeIf { c.startedAt > 0 }?.let { ScanProgress.clock(it - c.startedAt) } ?: ""
+        val speed = when {
+            c.status == CellStatus.DONE && c.kind == CellKind.SUSTAINED -> "${fmt(c.sustainedTokS)} tok/s hot"
+            c.status == CellStatus.DONE -> "${fmt(c.decodeMedianTokS)} tok/s"
+            c.status == CellStatus.FAILED -> "failed"
+            c.status == CellStatus.THERMAL_ABORT -> "stopped: too hot"
+            c.status == CellStatus.RUNNING -> "running"
+            else -> "not run"
+        }
+        Column(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+            Text("$start  ${c.stage} · ${c.label}${if (c.attempt > 0) " (re-run)" else ""}  —  $speed", fontSize = 13.sp)
+            val parts = mutableListOf<String>()
+            if (total.isNotEmpty()) parts += "took $total"
+            if (c.gateWaitS >= 1) parts += "cooled ${ScanProgress.clock((c.gateWaitS * 1000).toLong())}"
+            if (c.loadS >= 0) parts += "load ${c.loadS.toInt()} s"
+            if (parts.isNotEmpty()) Text(parts.joinToString(" · "), fontSize = 12.sp, color = sub)
+            c.error?.takeIf { it.isNotEmpty() }?.let { Text(it, fontSize = 12.sp, color = MaterialTheme.colorScheme.error) }
         }
     }
 }

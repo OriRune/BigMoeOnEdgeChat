@@ -6,6 +6,7 @@ import io.bigmoeonedge.example.chat.data.CellStatus
 import io.bigmoeonedge.example.chat.data.ChatDb
 import io.bigmoeonedge.example.chat.data.EngineStateName
 import io.bigmoeonedge.example.chat.data.ScanCellEntity
+import io.bigmoeonedge.example.chat.data.ScanPhase
 import io.bigmoeonedge.example.chat.data.ScanRunEntity
 import io.bigmoeonedge.example.chat.data.ScanRunStatus
 import io.bigmoeonedge.example.chat.engine.EngineEvent
@@ -21,6 +22,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import java.io.File
+import java.util.Locale
 
 /** Every duration of a scan in one place, so tests can run a whole scan in seconds. */
 data class ScanTiming(
@@ -32,6 +34,9 @@ data class ScanTiming(
     val nPredict: Int = 256,
     // A load that has not finished by then is thrashing (swap full of other apps) and is recorded as failed.
     val loadTimeoutMs: Long = 45 * 60_000L,
+    // A running engine that has produced nothing for this long is hung: the cell is recorded as failed
+    // instead of waiting for ever (a long first token on a big model is well under it).
+    val stallMs: Long = 15 * 60_000L,
     // Overrides the run's sustained minutes (tests and the fast fake mode).
     val sustainedMs: Long? = null,
 )
@@ -53,7 +58,9 @@ class ScanExecutor(
     @Volatile private var session: EngineSession? = null
     private val sampler by lazy { host.deviceSampler() }
     private val scan get() = db.scan()
-    private val cellDurations = mutableListOf<Long>()
+    // The phase on screen and when it began, so "cooling for 2:31" survives the many writes inside it.
+    private var phase = ""
+    private var phaseSince = 0L
 
     fun stop() {
         stopped = true
@@ -64,6 +71,7 @@ class ScanExecutor(
 
     suspend fun run(run0: ScanRunEntity) {
         stopped = false
+        phase = ""
         var run = run0
         scan.resetRunningCells(run.id)
         val size = File(run.modelPath).length()
@@ -83,14 +91,10 @@ class ScanExecutor(
                 if (run.referenceMemAvailMb == 0) {
                     run = measureReference(run, model) ?: return finish(run, ScanRunStatus.STOPPED, "Stopped.")
                 }
-                val cells = scan.cells(run.id)
-                when (val step = ScanPlanner.next(input, cells.map(::toPlanner))) {
+                val cells = scan.cellsLite(run.id)
+                when (val step = ScanPlanner.next(input, cells.map { it.toPCell() })) {
                     is PlanStep.Finished -> return conclude(run, step.outcome)
-                    is PlanStep.Run -> {
-                        val t0 = clock()
-                        val done = runCell(run, step, model, cells.size)
-                        if (done) cellDurations += clock() - t0
-                    }
+                    is PlanStep.Run -> runCell(run, step, model, cells.size)
                 }
             }
         } catch (e: kotlinx.coroutines.CancellationException) {
@@ -106,7 +110,7 @@ class ScanExecutor(
     // ── reference state ──
 
     private suspend fun measureReference(run: ScanRunEntity, model: String): ScanRunEntity? {
-        status(run, "reference", "Scan · $model · letting the phone settle", 0)
+        status(run, "reference", "Scan · $model · letting the phone settle", 0, ScanPhase.REFERENCE)
         val samples = mutableListOf<Sample>()
         val t0 = clock()
         var limit = timing.refIdleMs
@@ -115,7 +119,7 @@ class ScanExecutor(
             while (clock() - t0 < limit) {
                 if (stopped) return null
                 samples += sampler.sample(clock() - t0)
-                status(run, "reference", "Scan · $model · settling ${mmss(limit - (clock() - t0))}", 0)
+                status(run, "reference", "Scan · $model · settling ${mmss(limit - (clock() - t0))}", 0, ScanPhase.REFERENCE)
                 delay(timing.sampleMs)
             }
             ref = CooldownGate.reference(samples)
@@ -156,7 +160,7 @@ class ScanExecutor(
             if (clock() - t0 - paused > timing.gateMaxMs) {
                 return Gate((clock() - t0) / 1000.0, true, blockers.joinToString("; "), false)
             }
-            status(run, step.spec.stage, "Scan · $model · stage ${step.spec.stage} ${step.ordinal}/${step.ofTotal} · cooling ${mmss(clock() - t0)} · ${blockers.first()}", step.ordinal)
+            status(run, step.spec.stage, "Scan · $model · stage ${step.spec.stage} ${step.ordinal}/${step.ofTotal} · cooling ${mmss(clock() - t0)} · ${blockers.first()}", step.ordinal, ScanPhase.COOLING)
             delay(timing.gatePollMs)
         }
     }
@@ -174,7 +178,7 @@ class ScanExecutor(
         cell = cell.copy(gateWaitS = gate.waitS, gateGaveUp = gate.gaveUp, gateNote = gate.note).also { scan.updateCell(it) }
 
         val label = "Scan · $model · stage ${spec.stage} ${step.ordinal}/${step.ofTotal}"
-        status(run, spec.stage, "$label · loading", step.ordinal)
+        status(run, spec.stage, "$label · loading", step.ordinal, ScanPhase.LOADING)
         val csv = host.scanCsv(run.id, cell.id)
         val cfg = host.scanJobConfig(run.modelPath, spec.settings.copy(metricsCsv = true), csv)
         val s = EngineSession(host.createBackend(cfg), cfg.sig, run.modelPath)
@@ -183,6 +187,7 @@ class ScanExecutor(
 
         var result = cell.copy(argvSig = spec.key)
         val wall = mutableListOf<Double>()
+        val tokenCount = java.util.concurrent.atomic.AtomicInteger() // read by the sampling coroutine
         val at = mutableListOf<Long>()
         val samples = mutableListOf<Sample>()
         var peakMb = -1
@@ -192,8 +197,24 @@ class ScanExecutor(
         var totalTokens = 0
         var text = ""
         try {
-            val ready = withTimeoutOrNull(timing.loadTimeoutMs) { s.awaitReady() }
-                ?: throw SessionFailed("The model did not finish loading in ${timing.loadTimeoutMs / 60_000} minutes (memory pressure?).")
+            // A load can take many minutes with nothing else to show for it: a ticker writes how long it has
+            // been and how much of the model is in memory, which is also what tells a slow load from a hung one.
+            val ready = coroutineScope {
+                val loadStart = clock()
+                val tick = launch {
+                    while (isActive) {
+                        val mb = host.childMemoryMb(s.backend.pid)
+                        val mem = if (mb > 0) " · %.1f GB in memory".format(mb / 1024.0) else ""
+                        status(run, spec.stage, "$label · loading ${mmss(clock() - loadStart)}$mem", step.ordinal, ScanPhase.LOADING)
+                        delay(timing.sampleMs)
+                    }
+                }
+                try {
+                    withTimeoutOrNull(timing.loadTimeoutMs) { s.awaitReady() }
+                } finally {
+                    tick.cancel()
+                }
+            } ?: throw SessionFailed("The model did not finish loading in ${timing.loadTimeoutMs / 60_000} minutes (memory pressure?).")
             val (cpuset, cores) = host.cpusetOf(s.backend.pid)
             result = result.copy(
                 nExpertUsed = ready.nExpertUsed ?: 0, loadS = ready.loadS, cpuset = cpuset, cpusAllowed = cores,
@@ -204,6 +225,9 @@ class ScanExecutor(
             val deadline = genStart + (timing.sustainedMs ?: (run.sustainedMinutes * 60_000L))
             coroutineScope {
                 val sampling = launch {
+                    // (time, tokens so far) over the last half minute gives the rate right now.
+                    val window = ArrayDeque<Pair<Long, Int>>()
+                    val totalMs = deadline - genStart
                     while (isActive) {
                         val smp = sampler.sample(clock() - genStart)
                         samples += smp
@@ -212,6 +236,17 @@ class ScanExecutor(
                             aborted = true
                             s.backend.send(EngineProtocol.CANCEL)
                         }
+                        val now = clock()
+                        val n = tokenCount.get()
+                        window.addLast(now to n)
+                        while (window.size > 1 && now - window.first().first > RATE_WINDOW_MS) window.removeFirst()
+                        val rate = window.first().let { (t, c) -> if (now > t) (n - c) * 1000.0 / (now - t) else 0.0 }
+                        val progress = if (sustained) "${mmss(now - genStart)} of ${mmss(totalMs)}" else "$n of ${timing.nPredict} tokens"
+                        status(
+                            run, spec.stage, "$label · generating $progress · %.2f tok/s".format(Locale.US, rate), step.ordinal,
+                            ScanPhase.GENERATING, tokens = n, tokS = rate, target = if (sustained) 0 else timing.nPredict,
+                            totalMs = if (sustained) totalMs else 0,
+                        )
                         delay(timing.sampleMs)
                     }
                 }
@@ -231,17 +266,17 @@ class ScanExecutor(
                     var done: DoneInfo? = null
                     var retryFresh = false
                     while (done == null && !retryFresh) {
-                        val remaining = if (sustained) deadline - clock() else Long.MAX_VALUE
-                        val ev = if (sustained && !cancelSent) {
-                            withTimeoutOrNull(remaining.coerceAtLeast(1)) { s.events.receive() }
-                        } else {
-                            s.events.receive()
-                        }
+                        val remaining = if (sustained && !cancelSent) deadline - clock() else Long.MAX_VALUE
+                        // Never wait for ever: an engine that says nothing for stallMs is hung.
+                        val ev = withTimeoutOrNull(minOf(remaining.coerceAtLeast(1), timing.stallMs)) { s.events.receive() }
                         if (ev == null) {
-                            // The time is up: cut the reply short; the cancelled Done follows.
-                            cancelSent = true
-                            s.backend.send(EngineProtocol.CANCEL)
-                            continue
+                            if (sustained && !cancelSent && clock() >= deadline) {
+                                // The time is up: cut the reply short; the cancelled Done follows.
+                                cancelSent = true
+                                s.backend.send(EngineProtocol.CANCEL)
+                                continue
+                            }
+                            throw SessionFailed("The engine produced nothing for ${timing.stallMs / 60_000} minutes and was stopped.")
                         }
                         if (stopped && !cancelSent) {
                             cancelSent = true
@@ -255,6 +290,7 @@ class ScanExecutor(
                             is EngineSession.Ev.Line -> when (val p = s.protocol.parse(ev.text)) {
                                 is EngineEvent.Progress -> {
                                     wall += p.telemetry.wallMs
+                                    tokenCount.incrementAndGet()
                                     at += clock() - genStart
                                 }
                                 is EngineEvent.Done -> done = p.info
@@ -340,28 +376,31 @@ class ScanExecutor(
 
     // ── bookkeeping ──
 
-    private suspend fun status(run: ScanRunEntity, stage: String, text: String, ordinal: Int) {
+    private suspend fun status(
+        run: ScanRunEntity, stage: String, text: String, ordinal: Int, phase: String,
+        tokens: Int = 0, tokS: Double = 0.0, target: Int = 0, totalMs: Long = 0,
+    ) {
         val eta = etaText(run)
         val line = if (eta.isEmpty()) text else "$text · ETA $eta"
-        scan.run(run.id)?.let { scan.updateRun(it.copy(stage = stage, detail = line)) }
+        val now = clock()
+        if (phase != this.phase) {
+            this.phase = phase
+            phaseSince = now
+        }
+        scan.heartbeat(run.id, stage, line, phase, phaseSince, now, tokens, tokS, target, totalMs)
         host.foregroundText(line)
         setStatus(EngineStateName.SCANNING, line)
     }
 
-    private fun etaText(run: ScanRunEntity): String {
-        if (cellDurations.size < 2) return ""
-        val avg = cellDurations.average()
-        val size = File(run.modelPath).length()
-        val mid = ScanPlanner.estimateMinutes(size, host.ramBytes(), run.includeLossy, run.includeSustained, run.sustainedMinutes)
-        val expected = 14 + 4 + (if (run.includeSustained) 3 else 0) + (if (run.includeLossy) 6 else 0)
-        val left = (expected - cellDurations.size).coerceAtLeast(1)
-        val ms = (avg * left).toLong().coerceAtLeast(0)
-        return if (mid.last > 0) mmss(ms) else ""
+    /** The time left, from the cells of this run: what the plan still holds, at the pace measured so far. */
+    private suspend fun etaText(run: ScanRunEntity): String {
+        val o = ScanProgress.outline(run, scan.cellsLite(run.id), host.ramBytes(), clock())
+        return o.remainingMs?.takeIf { it > 0 }?.let { mmss(it) } ?: ""
     }
 
     private suspend fun finish(run: ScanRunEntity, status: String, verdict: String) {
         scan.run(run.id)?.let {
-            scan.updateRun(it.copy(status = status, finishedAt = clock(), detail = "", verdict = verdict))
+            scan.updateRun(it.copy(status = status, finishedAt = clock(), detail = "", verdict = verdict, phase = ""))
         }
         setStatus(EngineStateName.IDLE, "")
         scan.run(run.id)?.let { host.scanFinished(it) }
@@ -371,7 +410,7 @@ class ScanExecutor(
         scan.run(run.id)?.let {
             scan.updateRun(
                 it.copy(
-                    status = if (o.failed) ScanRunStatus.FAILED else ScanRunStatus.DONE, finishedAt = clock(), detail = "",
+                    status = if (o.failed) ScanRunStatus.FAILED else ScanRunStatus.DONE, finishedAt = clock(), detail = "", phase = "",
                     recommendedJson = o.recommended?.let(SettingsJson::toJson) ?: "", recommendedLabel = o.recommendedLabel,
                     verdict = o.verdict, confirmed = o.confirmed,
                 ),
@@ -381,15 +420,9 @@ class ScanExecutor(
         scan.run(run.id)?.let { host.scanFinished(it) }
     }
 
-    private fun toPlanner(c: ScanCellEntity) = PCell(
-        stage = c.stage, kind = c.kind, label = c.label, key = c.argvSig, status = c.status, attempt = c.attempt,
-        decodeMedianTokS = c.decodeMedianTokS, coolMedianTokS = c.coolMedianTokS, sustainedTokS = c.sustainedTokS,
-        throttledFrac = c.throttledFrac, peakAnonMb = c.peakAnonMb, cacheResidentMib = c.cacheResidentMib,
-        cpusAllowed = c.cpusAllowed, nExpertUsed = c.nExpertUsed, gateGaveUp = c.gateGaveUp,
-    )
+    private fun mmss(ms: Long): String = ScanProgress.clock(ms)
 
-    private fun mmss(ms: Long): String {
-        val s = (ms / 1000).coerceAtLeast(0)
-        return "%d:%02d".format(s / 60, s % 60)
+    private companion object {
+        const val RATE_WINDOW_MS = 30_000L
     }
 }

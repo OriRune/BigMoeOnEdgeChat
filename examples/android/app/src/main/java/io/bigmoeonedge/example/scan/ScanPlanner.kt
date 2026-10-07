@@ -61,6 +61,35 @@ sealed interface PlanStep {
     data class Finished(val outcome: ScanOutcome) : PlanStep
 }
 
+/** A cell of the plan: [have] is its measurement, null while it is still to run (or running). */
+data class PlannedCell(val spec: CellSpec, val have: PCell?, val ordinal: Int = 1, val ofTotal: Int = 1)
+
+/** One stage of the plan, with what it decided once its cells are measured. */
+data class StagePlan(
+    val stage: String,
+    val title: String,
+    val cells: List<PlannedCell>,
+    /** What the stage tried to improve on, and how fast it was (tok/s on the stage's own measure). */
+    val incumbentLabel: String = "",
+    val incumbentScore: Double = 0.0,
+    /** The candidate that replaced it; null when the incumbent stayed. */
+    val winnerLabel: String? = null,
+    /** The fastest measured candidate, whether or not it won. */
+    val bestLabel: String? = null,
+    val bestScore: Double = 0.0,
+) {
+    val measured: Int get() = cells.count { it.have != null }
+    val isDone: Boolean get() = measured == cells.size
+    /** The best candidate against the incumbent, in percent; 0 when either is unknown. */
+    val bestGainPct: Double get() = if (bestLabel != null && incumbentScore > 0) (bestScore / incumbentScore - 1) * 100 else 0.0
+}
+
+data class Plan(val stages: List<StagePlan>, val outcome: ScanOutcome) {
+    val steps: List<PlannedCell> get() = stages.flatMap { it.cells }
+    /** True while some cell is unmeasured: the outcome and the later stages are then a projection. */
+    val projected: Boolean get() = steps.any { it.have == null }
+}
+
 /**
  * Chooses the next cell of a scan from the cells recorded so far. It holds no state of its own, which
  * is what makes a scan resumable: after a restart the same cells give the same next step.
@@ -155,48 +184,92 @@ object ScanPlanner {
         return out
     }
 
+    /** The next thing to run, or the verdict when everything is measured. */
     fun next(inp: PlanInput, cells: List<PCell>): PlanStep {
+        val p = plan(inp, cells)
+        p.steps.firstOrNull { it.have == null }?.let { return PlanStep.Run(it.spec, it.ordinal, it.ofTotal) }
+        return PlanStep.Finished(p.outcome)
+    }
+
+    fun stageTitle(stage: String): String = when (stage) {
+        "CUR" -> "Your current settings"
+        "BASE" -> "Lossless baseline"
+        "A" -> "Dense weights"
+        "B" -> "Expert cache"
+        "C" -> "Threads"
+        "D" -> "I/O lanes"
+        "E" -> "Release mmap"
+        "F" -> "Row streaming"
+        "G" -> "N-gram drafting"
+        "S" -> "Sustained test"
+        "Z" -> "Confirmation"
+        "H" -> "Lossy settings"
+        else -> stage
+    }
+
+    private fun placeholder(spec: CellSpec, like: PCell? = null) = PCell(
+        spec.stage, spec.kind, spec.label, spec.key, CellStatus.DONE, spec.attempt,
+        decodeMedianTokS = 0.0, coolMedianTokS = 0.0, sustainedTokS = 0.0,
+        peakAnonMb = like?.peakAnonMb ?: -1, cacheResidentMib = like?.cacheResidentMib ?: -1.0,
+        cpusAllowed = like?.cpusAllowed ?: 0, nExpertUsed = like?.nExpertUsed ?: 0,
+    )
+
+    /**
+     * The whole scan, as far as it can be seen from the cells recorded so far: every stage in order with
+     * the cells it has (measured, or still to run) and what it decided. [next] is the first unmeasured
+     * cell of this, so the plan and the executor cannot disagree. Beyond the first unmeasured cell the
+     * plan is a projection that assumes nothing measured later wins by the margin (the incumbent stays),
+     * which is also why it shows no confirmation cells until something has won.
+     */
+    fun plan(inp: PlanInput, cells: List<PCell>): Plan {
         val base = SettingsJson.lossless(inp.current)
+        val stages = mutableListOf<StagePlan>()
         fun burst(stage: String, label: String, s: AppSettings, lossy: Boolean = false, kind: String = CellKind.BURST) =
             CellSpec(stage, kind, label, s, lossy, 0)
+        fun planned(spec: CellSpec, ordinal: Int = 1, ofTotal: Int = 1): PlannedCell = when (val r = resolve(spec, cells)) {
+            is Res.Need -> PlannedCell(r.spec, null, ordinal, ofTotal)
+            is Res.Have -> PlannedCell(spec, r.cell, ordinal, ofTotal)
+        }
 
         // 1-2: where the user is now, and the lossless baseline the search starts from.
         if (keyOf(inp.current) != keyOf(base)) {
-            (resolve(burst("CUR", "Your current settings", inp.current, lossy = true), cells) as? Res.Need)
-                ?.let { return PlanStep.Run(it.spec) }
+            stages += StagePlan("CUR", stageTitle("CUR"), listOf(planned(burst("CUR", "Your current settings", inp.current, lossy = true))))
         }
-        val baseCell = when (val r = resolve(burst("BASE", "Lossless baseline", base), cells)) {
-            is Res.Need -> return PlanStep.Run(r.spec)
-            is Res.Have -> r.cell
-        }
-        if (baseCell.status != CellStatus.DONE) {
-            return PlanStep.Finished(
+        val basePc = planned(burst("BASE", "Lossless baseline", base))
+        stages += StagePlan("BASE", stageTitle("BASE"), listOf(basePc))
+        val baseHave = basePc.have
+        if (baseHave != null && baseHave.status != CellStatus.DONE) {
+            return Plan(
+                stages,
                 ScanOutcome(null, "", false, "The baseline did not complete, so there is nothing to compare against.", failed = true),
             )
         }
+        val baseCell = baseHave ?: placeholder(basePc.spec)
 
-        // 3: burst stages.
+        // 3: burst stages. Only measured cells can win: an unmeasured one is not evidence.
         var inc = base
         var incCell = baseCell
         var runnerUpThreads: Int? = null
         for (stage in BURST_STAGES) {
-            val results = mutableListOf<Pair<Cand, PCell>>()
             val cands = candidates(stage, inc, baseCell, inp)
-            for ((i, c) in cands.withIndex()) {
-                when (val r = resolve(burst(stage, c.label, c.settings), cells)) {
-                    is Res.Need -> return PlanStep.Run(r.spec, i + 1, cands.size)
-                    is Res.Have -> results += c to r.cell
-                }
-            }
-            val done = results.filter { it.second.status == CellStatus.DONE }
-            val best = done.maxByOrNull { score(it.second) }
-            if (best != null && score(best.second) >= WIN_MARGIN * score(incCell)) {
+            val before = if (keyOf(inc) == keyOf(base)) "Lossless baseline" else describe(inc, base)
+            val pcs = cands.mapIndexed { i, c -> planned(burst(stage, c.label, c.settings), i + 1, cands.size) }
+            val done = cands.zip(pcs).filter { it.second.have?.status == CellStatus.DONE }
+            val best = done.maxByOrNull { score(it.second.have!!) }
+            val incScore = score(incCell)
+            var winner: String? = null
+            if (best != null && score(best.second.have!!) >= WIN_MARGIN * incScore) {
+                winner = best.first.label
                 inc = best.first.settings
-                incCell = best.second
+                incCell = best.second.have!!
             }
+            stages += StagePlan(
+                stage, stageTitle(stage), pcs, incumbentLabel = before, incumbentScore = incScore,
+                winnerLabel = winner, bestLabel = best?.first?.label, bestScore = best?.let { score(it.second.have!!) } ?: 0.0,
+            )
             if (stage == "C") {
                 runnerUpThreads = done.filter { keyOf(it.first.settings) != keyOf(inc) }
-                    .maxByOrNull { score(it.second) }?.first?.settings?.threads
+                    .maxByOrNull { score(it.second.have!!) }?.first?.settings?.threads
             }
         }
         val burstWinnerLabel = if (keyOf(inc) == keyOf(base)) "Lossless baseline" else describe(inc, base)
@@ -213,13 +286,11 @@ object ScanPlanner {
                 configs.putIfAbsent(keyOf(s), "Threads ${runnerUpThreads} (runner-up)" to s)
             }
             configs.putIfAbsent(keyOf(base), "Lossless baseline" to base)
-            val finished = mutableListOf<Triple<String, AppSettings, PCell>>()
-            for ((i, v) in configs.values.withIndex()) {
-                when (val r = resolve(burst("S", v.first, v.second, kind = CellKind.SUSTAINED), cells)) {
-                    is Res.Need -> return PlanStep.Run(r.spec, i + 1, configs.size)
-                    is Res.Have -> finished += Triple(v.first, v.second, r.cell)
-                }
+            val pcs = configs.values.mapIndexed { i, v ->
+                planned(burst("S", v.first, v.second, kind = CellKind.SUSTAINED), i + 1, configs.size)
             }
+            val finished = configs.values.zip(pcs).filter { it.second.have != null }
+                .map { Triple(it.first.first, it.first.second, it.second.have!!) }
             val best = finished.filter { it.third.status == CellStatus.DONE && it.third.sustainedTokS > 0 }
                 .maxByOrNull { it.third.sustainedTokS }
             if (best != null) {
@@ -227,6 +298,12 @@ object ScanPlanner {
                 sustainedLabel = best.first
                 recommendedLabel = if (keyOf(best.second) == keyOf(base)) "Lossless baseline" else describe(best.second, base)
             }
+            val first = finished.firstOrNull { it.first == "Fastest burst" }
+            stages += StagePlan(
+                "S", stageTitle("S"), pcs, incumbentLabel = burstWinnerLabel, incumbentScore = first?.third?.sustainedTokS ?: 0.0,
+                winnerLabel = best?.takeIf { it.first != "Fastest burst" }?.first,
+                bestLabel = best?.first, bestScore = best?.third?.sustainedTokS ?: 0.0,
+            )
         }
 
         // 5: confirmation, alternating W-B-W-B so slow drift hits both equally.
@@ -236,26 +313,25 @@ object ScanPlanner {
             verdict = "No setting beat the lossless baseline by a clear margin. Chats keep the baseline."
         } else {
             val seq = listOf("Recommended 1" to recommended, "Baseline 1" to base, "Recommended 2" to recommended, "Baseline 2" to base)
-            val got = mutableListOf<Pair<String, PCell>>()
-            for ((i, ls) in seq.withIndex()) {
-                val (label, s) = ls
-                when (val r = resolve(burst("Z", label, s, kind = CellKind.CONFIRM), cells)) {
-                    is Res.Need -> return PlanStep.Run(r.spec, i + 1, seq.size)
-                    is Res.Have -> got += label to r.cell
-                }
-            }
+            val pcs = seq.mapIndexed { i, ls -> planned(burst("Z", ls.first, ls.second, kind = CellKind.CONFIRM), i + 1, seq.size) }
+            val allMeasured = pcs.all { it.have != null }
+            val got = seq.zip(pcs).filter { it.second.have != null }.map { it.first.first to it.second.have!! }
             val w = got.filter { it.first.startsWith("Recommended") }.map { score(it.second) }.average()
             val b = got.filter { it.first.startsWith("Baseline") }.map { score(it.second) }.average()
-            confirmed = b > 0 && w >= WIN_MARGIN * b
-            verdict = if (confirmed) {
-                "Confirmed: %.1f tok/s against %.1f for the baseline.".format(w, b)
-            } else {
-                "The gain is within noise (%.1f against %.1f tok/s), so treat it as a tie.".format(w, b)
+            confirmed = allMeasured && b > 0 && w >= WIN_MARGIN * b
+            verdict = when {
+                !allMeasured -> ""
+                confirmed -> "Confirmed: %.1f tok/s against %.1f for the baseline.".format(w, b)
+                else -> "The gain is within noise (%.1f against %.1f tok/s), so treat it as a tie.".format(w, b)
             }
-            if (inp.includeSustained && sustainedLabel.isNotEmpty() && keyOf(inc) != keyOf(recommended)) {
+            if (allMeasured && inp.includeSustained && sustainedLabel.isNotEmpty() && keyOf(inc) != keyOf(recommended)) {
                 verdict = "Fastest from cold: $burstWinnerLabel. Fastest once the phone is hot: $recommendedLabel. " +
                     "Chats use the second. $verdict"
             }
+            stages += StagePlan(
+                "Z", stageTitle("Z"), pcs, incumbentLabel = "Lossless baseline", incumbentScore = if (allMeasured) b else 0.0,
+                winnerLabel = if (confirmed) recommendedLabel else null, bestLabel = recommendedLabel, bestScore = if (allMeasured) w else 0.0,
+            )
         }
 
         // 6: lossy candidates, measured against the final lossless recommendation and never applied.
@@ -270,14 +346,10 @@ object ScanPlanner {
                 lossy += Cand("substitute 10%", recommended.copy(substitutePct = 10))
                 lossy += Cand("substitute 15%", recommended.copy(substitutePct = 15))
             }
-            for ((i, c) in lossy.withIndex()) {
-                (resolve(burst("H", c.label, c.settings, lossy = true), cells) as? Res.Need)
-                    ?.let { return PlanStep.Run(it.spec, i + 1, lossy.size) }
-            }
+            val pcs = lossy.mapIndexed { i, c -> planned(burst("H", c.label, c.settings, lossy = true), i + 1, lossy.size) }
+            stages += StagePlan("H", stageTitle("H"), pcs)
         }
-        return PlanStep.Finished(
-            ScanOutcome(recommended, recommendedLabel, confirmed, verdict, burstWinnerLabel, sustainedLabel),
-        )
+        return Plan(stages, ScanOutcome(recommended, recommendedLabel, confirmed, verdict, burstWinnerLabel, sustainedLabel))
     }
 
     /** What differs from the baseline, in a few words. */
