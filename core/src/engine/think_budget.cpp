@@ -35,6 +35,36 @@ ThinkSpan think_span_from(const common_chat_params & cp) {
     return span;
 }
 
+std::string collapse_repeated_ends(const std::string & raw, const ThinkSpan & span) {
+    if (!span.valid()) return raw;
+    // The first closer after the span opened. A span the prompt left open starts at the beginning.
+    size_t from = 0;
+    if (!span.open_at_start) {
+        const size_t open_at = raw.find(span.start);
+        if (open_at == std::string::npos) return raw;
+        from = open_at + span.start.size();
+    }
+    size_t first = std::string::npos, len = 0;
+    for (const std::string & e : span.ends) {
+        const size_t at = raw.find(e, from);
+        if (at == std::string::npos) continue;
+        if (first == std::string::npos || at < first || (at == first && e.size() > len)) first = at, len = e.size();
+    }
+    if (first == std::string::npos) return raw;
+
+    // Skip the closers that follow it immediately; the longest spelling wins at each step.
+    size_t end = first + len;
+    for (;;) {
+        size_t step = 0;
+        for (const std::string & e : span.ends)
+            if (e.size() > step && raw.compare(end, e.size(), e) == 0) step = e.size();
+        if (step == 0) break;
+        end += step;
+    }
+    if (end == first + len) return raw;
+    return raw.substr(0, first + len) + raw.substr(end);
+}
+
 ThinkGovernor::ThinkGovernor(ThinkSpan span, std::vector<llama_token> forced, int budget)
     : active_(span.valid() && !forced.empty()), span_(std::move(span)), forced_(std::move(forced)), budget_(budget) {
     if (active_ && span_.open_at_start) state_ = State::Open;

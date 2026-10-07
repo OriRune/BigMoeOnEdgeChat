@@ -18,6 +18,13 @@ Semantic Versioning.
   command sits beside `cancel`, and `BMOE_DONE` ends with `thinking_cut` and `thinking_tokens`. See
   `docs/telemetry.md`.
 
+### Fixed
+- **A reply whose reasoning span is closed more than once showed nothing.** A pruned Gemma 4 writes
+  the closing tag three times after an empty span, and the chat parser then returned neither
+  reasoning nor answer for the whole turn, however long it was. The text handed to the parser now
+  keeps the first closer and drops the ones that follow it directly; generation, the KV cache and the
+  history the model sees are untouched.
+
 ## [0.28.1] - 2026-10-04
 
 ### Added

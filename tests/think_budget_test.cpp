@@ -106,6 +106,27 @@ int main() {
                    s.valid() || (!g.active() && !g.override_token(true, out)));
         }
 
+        // A model that writes the closer more than once: the parser would read none of the turn.
+        {
+            using bmoe::detail::collapse_repeated_ends;
+            expect("repeated closers right after the first are dropped",
+                   collapse_repeated_ends("<t>\n</t></t></t>answer", span(false)) == "<t>\n</t>answer");
+            expect("a span the prompt left open starts at the beginning",
+                   collapse_repeated_ends("thought</t></t>answer", span(true)) == "thought</t>answer");
+            expect("one closer is left as it is",
+                   collapse_repeated_ends("<t>a</t>answer", span(false)) == "<t>a</t>answer");
+            expect("a later closer inside the answer is not touched",
+                   collapse_repeated_ends("<t>a</t>x</t>y", span(false)) == "<t>a</t>x</t>y");
+            expect("no opener seen, nothing to collapse",
+                   collapse_repeated_ends("a</t></t>b", span(false)) == "a</t></t>b");
+            expect("no span, no change", collapse_repeated_ends("<t></t></t>", ThinkSpan{}) == "<t></t></t>");
+            auto t = load(BMOE_TMPL_GEMMA4);
+            const ThinkSpan g = bmoe::detail::think_span_from(render(t.get(), true));
+            expect("gemma4: three closers after an empty span become one",
+                   collapse_repeated_ends("<|channel>thought\n<channel|><channel|><channel|>To find", g) ==
+                       "<|channel>thought\n<channel|>To find");
+        }
+
         // Policy.
         {
             ThinkGovernor g(span(true), FORCED, 5);

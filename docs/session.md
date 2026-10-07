@@ -81,7 +81,9 @@ out of the raw stream and carries it in its own field (`TokenMetrics`/`RunResult
 `delta_reasoning` on `BMOE_PROGRESS`, `reasoning` on `BMOE_DONE`) rather than dropping it. The answer text stays free of
 it either way, so the byte-identity gates are unaffected; a caller that wants to show the thinking
 reads the separate field. The parser wiring lives in `core/src/engine/chat_parse.cpp`
-(see [seam.md](seam.md)).
+(see [seam.md](seam.md)). A model that writes the span's closing tag several times in a row would make
+the parser return nothing at all, so the text handed to it keeps the first closer and drops the
+repeats (`collapse_repeated_ends`); the raw generation is never edited.
 
 ## Cancel
 

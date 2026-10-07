@@ -35,6 +35,13 @@ struct ThinkSpan {
 // declares no span, such as one whose reasoning is a structural channel.
 ThinkSpan think_span_from(const common_chat_params & cp);
 
+// A model can write the closing tag more than once in a row (a pruned Gemma 4 writes it three times
+// after an empty span), and the chat parser then reads none of the turn: no reasoning, no answer. This
+// keeps the first closer and drops the ones that follow it back to back, in the text handed to the
+// parser only; generation, the KV cache and the sampler never see the change. No span, or no repeat,
+// returns the text as it is.
+std::string collapse_repeated_ends(const std::string & raw, const ThinkSpan & span);
+
 // Follows one generation's text, counts the tokens spent inside the span, and says when to take over
 // the sampling. Pure: the caller tokenizes the end tag and passes the ids in, so the policy is
 // unit-tested without a model.

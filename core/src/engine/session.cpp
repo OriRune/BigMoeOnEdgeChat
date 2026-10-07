@@ -1445,7 +1445,8 @@ RunResult Session::generate(const GenerateRequest & req,
         // disguise a model this mechanism does not work on; the honest report is ThinkControl::None.)
         if (prefilled_answer) return {raw, ""};
         try {
-            common_chat_msg msg = common_chat_parse(raw, partial, parse_params);
+            common_chat_msg msg =
+                common_chat_parse(detail::collapse_repeated_ends(raw, think_span), partial, parse_params);
             return {msg.content, msg.reasoning_content};
         } catch (const std::exception & e) {
             detail::warn_parse_failed_once(e.what());
@@ -2070,7 +2071,8 @@ RunResult Session::generate(const GenerateRequest & req,
     bool final_parsed = false;
     if (chat_on && !prefilled_answer) {
         try {
-            final_msg = common_chat_parse(gen, /*is_partial*/ false, parse_params);
+            final_msg =
+                common_chat_parse(detail::collapse_repeated_ends(gen, think_span), /*is_partial*/ false, parse_params);
             final_parsed = true;
         } catch (const std::exception & e) {
             detail::warn_parse_failed_once(e.what());
