@@ -118,7 +118,7 @@ fun ScanResultsScreen(vm: ScanResultsViewModel, onBack: () -> Unit) {
                 val active = if (r.status == ScanRunStatus.DONE) null else o.currentStage?.stage
                 for (st in o.stages) {
                     Text(
-                        "${st.stage} · ${st.title}: ${ScanProgress.stageLine(st, active)}", fontSize = 13.sp,
+                        "${st.stage} · ${st.title}: ${ScanProgress.stageLine(st, active, ended = r.status != ScanRunStatus.RUNNING)}", fontSize = 13.sp,
                         color = if (st.cells.isEmpty() || (!st.isDone && r.status == ScanRunStatus.DONE)) MaterialTheme.colorScheme.onSurfaceVariant
                         else MaterialTheme.colorScheme.onSurface,
                     )
@@ -152,7 +152,12 @@ fun ScanResultsScreen(vm: ScanResultsViewModel, onBack: () -> Unit) {
 private fun SummaryCard(r: ScanRunEntity, cells: List<ScanCellEntity>, outline: Outline?) {
     val fmt = remember { DateTimeFormatter.ofPattern("EEE MMM d, HH:mm", Locale.getDefault()) }
     val started = Instant.ofEpochMilli(r.startedAt).atZone(ZoneId.systemDefault()).format(fmt)
-    val took = r.finishedAt?.let { ScanProgress.clock((it - r.startedAt).coerceAtLeast(0)) }
+    // Wall-clock time includes every pause (phone off, scan stopped and resumed); the cells show the time spent measuring.
+    val wall = r.finishedAt?.let { (it - r.startedAt).coerceAtLeast(0) }
+    val active = cells.filter { it.startedAt > 0 && it.finishedAt != null }.sumOf { (it.finishedAt!! - it.startedAt).coerceAtLeast(0) }
+    val took = wall?.let { w ->
+        ScanProgress.span(w) + if (w > active * 3 / 2 && active > 0) ", ${ScanProgress.span(active)} of it measuring" else ""
+    }
     val gain = runCatching {
         ScanProgress.gainOverBaselinePct(cells.map(ScanCellEntity::lite), r.recommendedJson.takeIf { it.isNotEmpty() }
             ?.let { ScanPlanner.keyOf(SettingsJson.fromJson(it)) })
@@ -188,7 +193,9 @@ private fun SummaryCard(r: ScanRunEntity, cells: List<ScanCellEntity>, outline: 
 /** Every cell in the order it ran: when, how long, what it measured, and why it failed if it did. */
 @Composable
 private fun Timeline(cells: List<ScanCellEntity>) {
-    val fmt = remember { DateTimeFormatter.ofPattern("HH:mm", Locale.getDefault()) }
+    // A scan that runs for days needs the date on each line, or "02:11" could be any of them.
+    val days = cells.filter { it.startedAt > 0 }.map { Instant.ofEpochMilli(it.startedAt).atZone(ZoneId.systemDefault()).toLocalDate() }.distinct().size
+    val fmt = remember(days) { DateTimeFormatter.ofPattern(if (days > 1) "EEE HH:mm" else "HH:mm", Locale.getDefault()) }
     val sub = MaterialTheme.colorScheme.onSurfaceVariant
     if (cells.isEmpty()) Hint("No cell has run yet.")
     for (c in cells) {

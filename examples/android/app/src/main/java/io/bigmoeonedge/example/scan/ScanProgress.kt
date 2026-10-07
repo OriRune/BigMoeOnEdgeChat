@@ -100,13 +100,26 @@ object ScanProgress {
         return { kind -> when (kind) { CellKind.SUSTAINED -> sustained; CellKind.CONFIRM -> confirm; else -> burst } }
     }
 
-    /** The one-line state of a stage for the checklist: what it found, or how far it has got. */
-    fun stageLine(sp: StagePlan, activeStage: String?): String = when {
+    /**
+     * The one-line state of a stage for the checklist: what it found, or how far it has got. For a scan
+     * that is no longer running (`ended`), a stage with nothing measured was never reached, not waiting.
+     */
+    fun stageLine(sp: StagePlan, activeStage: String?, ended: Boolean = false): String {
+        fun unmeasured() = when {
+            !ended -> if (sp.stage == activeStage) "measuring…" else "waiting"
+            sp.stage == activeStage -> "not reached: the scan stopped here"
+            else -> "not run"
+        }
+        return stageLineOf(sp, ::unmeasured, ended)
+    }
+
+    private fun stageLineOf(sp: StagePlan, unmeasured: () -> String, ended: Boolean): String = when {
         sp.cells.isEmpty() -> "not applicable to this model"
         sp.stage == "BASE" || sp.stage == "CUR" -> sp.cells.single().have?.let { c ->
             if (c.status != CellStatus.DONE) "failed" else fmt(ScanPlanner.score(c)) + " tok/s"
-        } ?: if (sp.stage == activeStage) "measuring…" else "waiting"
-        !sp.isDone -> if (sp.measured == 0) (if (sp.stage == activeStage) "measuring…" else "waiting")
+        } ?: unmeasured()
+        !sp.isDone -> if (sp.measured == 0) unmeasured()
+        else if (ended) "${sp.measured} of ${sp.cells.size} measured, then it stopped"
         else "${sp.measured} of ${sp.cells.size} measured"
         sp.stage == "S" -> sp.winnerLabel?.let { "${it} was fastest hot (${fmt(sp.bestScore)} tok/s)" }
             ?: "${sp.bestLabel ?: "no result"} stays (${fmt(sp.bestScore)} tok/s hot)"
@@ -134,6 +147,16 @@ object ScanProgress {
     fun clock(ms: Long): String {
         val s = (ms / 1000).coerceAtLeast(0)
         return if (s >= 3600) "%d:%02d:%02d".format(s / 3600, s % 3600 / 60, s % 60) else "%d:%02d".format(s / 60, s % 60)
+    }
+
+    /** "28 h 25 min", "42 min", "under a minute": an elapsed span, not an estimate. */
+    fun span(ms: Long): String {
+        val m = Math.round(ms / 60_000.0).toInt()
+        return when {
+            ms < 60_000 -> "under a minute"
+            m >= 120 -> "%d h %02d min".format(m / 60, m % 60)
+            else -> "$m min"
+        }
     }
 
     /** "about 1 h 40 min", "about 12 min", "under a minute". */

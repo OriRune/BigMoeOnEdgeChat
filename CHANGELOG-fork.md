@@ -21,6 +21,10 @@ changes offered back upstream go there instead, per `AGENTS.md`.
 - The scan executor writes a heartbeat from every loop, including the model load, which used to be
   silent for as long as it took. An engine that produces nothing for 15 minutes is stopped and the cell
   recorded as failed instead of being waited on for ever.
+- A scan that is no longer running says *not run* for the stages it never reached (and *stopped here*
+  for the one it stopped in) instead of *waiting*. The summary separates the wall-clock time from the
+  time spent measuring (a scan paused for a day read as "28:25:02"), and the timeline names the weekday
+  once a scan spans more than one day.
 - `ScanPlanner.next` is now the first unmeasured cell of `ScanPlanner.plan`, which also describes the
   rest of the scan; the planner's behaviour is unchanged (its tests are).
 

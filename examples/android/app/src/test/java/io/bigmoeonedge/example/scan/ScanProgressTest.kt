@@ -83,6 +83,23 @@ class ScanProgressTest {
         assertTrue(ScanProgress.stageLine(c, null), ScanProgress.stageLine(c, null).contains("+4%") && ScanProgress.stageLine(c, null).contains("needs +5%"))
     }
 
+    @Test fun anEndedScanDoesNotCallUnreachedStagesWaiting() {
+        val inp = input()
+        val p = ScanPlanner.plan(inp, measure(inp, n = 1).map { it.toPCell() })
+        val open = p.stages.first { !it.isDone }
+        val later = p.stages.last { !it.isDone && it.stage != open.stage }
+        assertEquals("measuring…", ScanProgress.stageLine(open, open.stage))
+        assertEquals("waiting", ScanProgress.stageLine(later, open.stage))
+        assertTrue(ScanProgress.stageLine(open, open.stage, ended = true).contains("stopped"))
+        assertEquals("not run", ScanProgress.stageLine(later, open.stage, ended = true))
+    }
+
+    @Test fun spansReadAsElapsedTimeNotAnEstimate() {
+        assertEquals("under a minute", ScanProgress.span(30_000))
+        assertEquals("42 min", ScanProgress.span(42 * 60_000L))
+        assertEquals("28 h 25 min", ScanProgress.span((28 * 60 + 25) * 60_000L))
+    }
+
     @Test fun anUnreachedProjectionNeverLetsAnUnmeasuredCellWin() {
         // Only the baseline is measured: every later stage is a projection and the incumbent stays.
         val inp = input()
