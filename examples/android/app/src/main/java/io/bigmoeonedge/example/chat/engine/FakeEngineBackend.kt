@@ -16,7 +16,9 @@ import kotlin.concurrent.thread
  * `[crash]` exits with a fatal error (they are read at the end because the app merges a failed
  * turn's message into the next prompt); `[slow]` runs at a tenth of the rate, `[long]` writes 600
  * tokens and `[drop2]` reports two dropped history messages, wherever they appear. The think flag
- * adds a reasoning span.
+ * adds a reasoning span; with `[thinklong]` the span runs 600 tokens unless `think_budget` or an
+ * `end_thinking` command ends it first, and what is left of `n_predict` goes to the answer, so a model
+ * that thinks too long ends with no answer, as the real ones do.
  *
  * [tokPerSec] may be derived from the session's argv, which is how the scan's fake varies speed by
  * setting.
@@ -29,6 +31,7 @@ class FakeEngineBackend(
     @Volatile private var alive = false
     @Volatile private var cancelled = false
     @Volatile private var frozen = false
+    @Volatile private var endThinking = false
     @Volatile private var argv: List<String> = emptyList()
 
     override val isAlive: Boolean get() = alive
@@ -68,6 +71,7 @@ class FakeEngineBackend(
     /** False on a fatal error: the process ends. */
     private fun generate(o: JSONObject, out: EngineBackend.Listener): Boolean {
         cancelled = false
+        endThinking = false
         val id = o.optInt("id")
         val prompt = o.optString("prompt")
         val roles = o.optJSONArray("history_roles")
@@ -84,27 +88,48 @@ class FakeEngineBackend(
         val nPredict = o.optInt("n_predict", 128)
         // The scan's prompts ask for a full-length reply, so the fake phone has time to heat.
         val want = if (prompt.contains("[long]")) 600 else if (prompt.contains("Continue")) nPredict else 40
-        val total = minOf(want, nPredict)
+        val stepsTotal = minOf(want, nPredict)
         val think = o.optBoolean("think", false)
+        val budget = o.optInt("think_budget", -1)
+        val longThink = think && prompt.contains("[thinklong]")
         out.onLine("""BMOE_BEGIN {"id":$id}""")
 
         var userTurns = 0
         for (i in 0 until histN) if (roles.optString(i) == "user") userTurns++
+
+        val reasoning = StringBuilder()
+        val t0 = System.nanoTime()
+        FakeThermal.active = true
+        var spent = 0 // tokens counted against n_predict, reasoning included
+        var thinkingCut = false
+        if (longThink) {
+            while (spent < 600 && spent < nPredict && !cancelled) {
+                if (budget >= 0 && spent >= budget || endThinking) {
+                    thinkingCut = true
+                    break
+                }
+                while (frozen && !cancelled && alive) Thread.sleep(20)
+                val gapMs = (1000.0 / (baseRate * FakeThermal.slowdown())).toLong().coerceAtLeast(1)
+                Thread.sleep(gapMs)
+                val w = "idea${spent + 1} "
+                reasoning.append(w)
+                spent++
+                out.onLine(progress(spent, stepsTotal, gapMs.toDouble(), "", w))
+            }
+        } else if (think) {
+            val r = "Let me think about that. "
+            reasoning.append(r)
+            out.onLine(progress(0, stepsTotal, 1000.0 / baseRate, "", r))
+        }
+        val thinkTokens = spent
+
+        val total = minOf(want, nPredict - spent).coerceAtLeast(0)
         val words = ArrayList<String>()
         words += "Fake reply. I was given ${userTurns + 1} user turns and $histN earlier messages; the newest says:"
         words += "“${prompt.take(60).replace('\n', ' ')}”."
         while (words.joinToString(" ").split(' ').size < total) words += LOREM
         val tokens = words.joinToString(" ").split(' ').take(total)
-
-        val reasoning = StringBuilder()
         val text = StringBuilder()
-        val t0 = System.nanoTime()
-        FakeThermal.active = true
-        if (think) {
-            val r = "Let me think about that. "
-            reasoning.append(r)
-            out.onLine(progress(0, total, 1000.0 / baseRate, "", r))
-        }
         for ((i, w) in tokens.withIndex()) {
             if (cancelled) break
             // A frozen process makes no progress; a cancel or a kill still ends the wait.
@@ -114,11 +139,11 @@ class FakeEngineBackend(
             Thread.sleep(gapMs)
             val delta = if (i == 0) w else " $w"
             text.append(delta)
-            out.onLine(progress(i + 1, total, gapMs.toDouble(), delta, ""))
+            out.onLine(progress(spent + i + 1, stepsTotal, gapMs.toDouble(), delta, ""))
         }
         FakeThermal.active = false
         val elapsed = (System.nanoTime() - t0) / 1e9
-        val n = if (text.isEmpty()) 0 else text.split(' ').size
+        val n = (if (text.isEmpty()) 0 else text.split(' ').size) + thinkTokens
         val dropped = if (prompt.contains("[drop2]")) 2 else 0
         out.onLine(
             String.format(
@@ -126,9 +151,10 @@ class FakeEngineBackend(
                 """BMOE_DONE {"id":%d,"cancelled":%s,"tokens":%d,"tok_s":%.3f,"prefill_s":0.4,"prefill_tps":50.0,""" +
                     """"load_s":%.2f,"cache_hit_pct":80.0,"n_prompt":%d,"n_past":%d,"read_mib":10.0,""" +
                     """"majflt_tok":0.0,"cpu_s_tok":0.2,"cache_resident_mib":500.0,"loop_overhead_s_tok":0.0,""" +
-                    """"reasoning":"%s","text":"%s","history_dropped":%d}""",
+                    """"reasoning":"%s","text":"%s","history_dropped":%d,"thinking_cut":%s,"thinking_tokens":%d}""",
                 id, cancelled, n, if (elapsed > 0) n / elapsed else 0.0, loadMs / 1000.0, prompt.length / 4, n + histN * 10,
                 EngineProtocol.jsonEscape(reasoning.toString()), EngineProtocol.jsonEscape(text.toString()), dropped,
+                thinkingCut, thinkTokens,
             ),
         )
         return true
@@ -146,6 +172,10 @@ class FakeEngineBackend(
         if (!alive) return false
         if (json.contains("\"cmd\":\"cancel\"")) {
             cancelled = true
+            return true
+        }
+        if (json.contains("\"cmd\":\"end_thinking\"")) {
+            endThinking = true
             return true
         }
         inbox.put(json)

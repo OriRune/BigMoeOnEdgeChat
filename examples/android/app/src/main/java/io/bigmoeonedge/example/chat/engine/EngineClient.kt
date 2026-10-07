@@ -17,6 +17,9 @@ class EngineClient(private val ctx: Context) : EngineKicker {
 
     fun cancel(messageId: Long) = sendBoth(EngineService.ACTION_CANCEL) { putExtra(EngineService.EXTRA_MESSAGE_ID, messageId) }
 
+    /** Stop the model thinking about [messageId] and make it answer now. */
+    fun endThinking(messageId: Long) = sendBoth(EngineService.ACTION_END_THINKING) { putExtra(EngineService.EXTRA_MESSAGE_ID, messageId) }
+
     /** A scan run was queued or resumed in the database: start working on it. */
     fun scanStart() = send(EngineService.ACTION_SCAN_START)
 

@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import io.bigmoeonedge.example.ModelManager
 import io.bigmoeonedge.example.chat.ChatServices
+import io.bigmoeonedge.example.chat.ThinkLevel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -45,8 +46,8 @@ class NewChatViewModel(private val app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(selected = path)
     }
 
-    fun create(system: String, thinking: Boolean, onCreated: (Long) -> Unit) {
+    fun create(system: String, thinking: Boolean, level: ThinkLevel, onCreated: (Long) -> Unit) {
         val model = _state.value.selected ?: return
-        viewModelScope.launch { onCreated(repo.createConversation(model, system.trim(), thinking)) }
+        viewModelScope.launch { onCreated(repo.createConversation(model, system.trim(), thinking, thinkLevel = level)) }
     }
 }

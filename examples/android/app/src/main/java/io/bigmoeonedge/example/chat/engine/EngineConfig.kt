@@ -3,6 +3,7 @@ package io.bigmoeonedge.example.chat.engine
 import io.bigmoeonedge.example.AppSettings
 import io.bigmoeonedge.example.DenseWeights
 import io.bigmoeonedge.example.chat.ChatSettings
+import io.bigmoeonedge.example.chat.ThinkLevel
 
 /**
  * What a chat job asks of the engine: the argv that opens the session and its identity. Pure, so the
@@ -60,6 +61,20 @@ data class EngineConfig(
             chat.sessionCtx != ChatSettings.CTX_AUTO -> chat.sessionCtx
             modelBytes >= BIG_MODEL_BYTES && !mmap && !foreground -> SMALL_FOOTPRINT_CTX
             else -> AppSettings.SESSION_CTX
+        }
+
+        /** What one reply asks the engine for: the total n_predict, and the part of it thinking may use. */
+        data class TurnBudget(val nPredict: Int, val thinkBudget: Int?)
+
+        /**
+         * The reply length [reply] is the answer's; thinking comes on top, so a long think cannot eat
+         * the answer. The context is shared with the history, so thinking never takes more than a
+         * quarter of it (on top of a reply that is already at most half).
+         */
+        fun turnBudget(reply: Int, ctx: Int, thinking: Boolean, level: ThinkLevel): TurnBudget {
+            if (!thinking) return TurnBudget(reply, null)
+            val think = minOf(level.tokens, (ctx / 4).coerceAtLeast(64))
+            return TurnBudget(reply + think, think)
         }
 
         /** Sampling flags for the session argv; greedy when the temperature is 0. */

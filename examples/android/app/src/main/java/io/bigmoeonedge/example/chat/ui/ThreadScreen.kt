@@ -61,6 +61,7 @@ import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.bigmoeonedge.example.MarkdownText
 import io.bigmoeonedge.example.chat.ChatFormat
+import io.bigmoeonedge.example.chat.ThinkLevel
 import io.bigmoeonedge.example.chat.data.MessageEntity
 import io.bigmoeonedge.example.chat.data.MessageStatus
 import io.bigmoeonedge.example.chat.data.Role
@@ -75,6 +76,7 @@ fun ThreadScreen(vm: ThreadViewModel, onBack: () -> Unit) {
     val tuned by vm.hasProfile.collectAsStateWithLifecycle()
     val foreground by vm.foreground.collectAsStateWithLifecycle()
     var foregroundDialog by remember { mutableStateOf(false) }
+    var thinkingDialog by remember { mutableStateOf(false) }
     val conv = ui.conversation
     var draft by rememberSaveable { mutableStateOf("") }
     var menu by remember { mutableStateOf(false) }
@@ -117,7 +119,8 @@ fun ThreadScreen(vm: ThreadViewModel, onBack: () -> Unit) {
                         if (conv != null) {
                             Text(
                                 ChatFormat.modelShortName(conv.modelPath) + (if (tuned) " · Scan-tuned settings" else "") +
-                                    (if (foreground) " · Foreground mode" else ""),
+                                    (if (foreground) " · Foreground mode" else "") +
+                                    (if (conv.thinking) " · Thinking ${ThinkLevel.of(conv.thinkLevel).label.lowercase()}" else ""),
                                 fontSize = 12.sp, maxLines = 1,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -142,6 +145,12 @@ fun ThreadScreen(vm: ThreadViewModel, onBack: () -> Unit) {
                                     onClick = { menu = false; vm.resetProfile() },
                                 )
                             }
+                            DropdownMenuItem(
+                                text = {
+                                    Text("Thinking: " + (if (conv?.thinking == true) ThinkLevel.of(conv.thinkLevel).label else "Off"))
+                                },
+                                onClick = { menu = false; thinkingDialog = true },
+                            )
                             DropdownMenuItem(
                                 text = { Text(if (foreground) "Foreground mode: on" else "Foreground mode: off") },
                                 onClick = { menu = false; foregroundDialog = true },
@@ -185,6 +194,7 @@ fun ThreadScreen(vm: ThreadViewModel, onBack: () -> Unit) {
                             onEdit = { editing = m },
                             onRetry = { vm.retry(m.id) },
                             onStop = { vm.stop(m.id) },
+                            onAnswerNow = { vm.answerNow(m.id) },
                             onCancelQueued = { vm.cancelQueued(m.id) },
                         )
                         if (m.id == newestOutOfContext) {
@@ -243,6 +253,28 @@ fun ThreadScreen(vm: ThreadViewModel, onBack: () -> Unit) {
             },
             confirmButton = {},
             dismissButton = { TextButton(onClick = { switching = false }) { Text("Close") } },
+        )
+    }
+    if (thinkingDialog && conv != null) {
+        val current = ThinkingChoices.index(conv.thinking, ThinkLevel.of(conv.thinkLevel))
+        AlertDialog(
+            onDismissRequest = { thinkingDialog = false },
+            title = { Text("Thinking") },
+            text = {
+                Column {
+                    Text(
+                        "How long the model may think before it has to answer. It applies from the next reply.",
+                        fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    ThinkingChoices.labels.forEachIndexed { i, label ->
+                        TextButton(onClick = { thinkingDialog = false; vm.setThinking(i) }) {
+                            Text(if (i == current) "$label  ✓" else label)
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = { TextButton(onClick = { thinkingDialog = false }) { Text("Close") } },
         )
     }
     if (foregroundDialog) {
@@ -329,6 +361,7 @@ private fun MessageBubble(
     onEdit: () -> Unit,
     onRetry: () -> Unit,
     onStop: () -> Unit,
+    onAnswerNow: () -> Unit,
     onCancelQueued: () -> Unit,
 ) {
     val mine = m.role == Role.USER
@@ -344,7 +377,7 @@ private fun MessageBubble(
                     .combinedClickable(onClick = {}, onLongClick = { menu = true }),
             ) {
                 Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    if (mine) UserBody(m) else AssistantBody(m, ui, onRetry, onStop, onCancelQueued)
+                    if (mine) UserBody(m) else AssistantBody(m, ui, onRetry, onStop, onAnswerNow, onCancelQueued)
                 }
             }
             DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
@@ -364,7 +397,8 @@ private fun UserBody(m: MessageEntity) {
 
 @Composable
 private fun AssistantBody(
-    m: MessageEntity, ui: ThreadUi, onRetry: () -> Unit, onStop: () -> Unit, onCancelQueued: () -> Unit,
+    m: MessageEntity, ui: ThreadUi, onRetry: () -> Unit, onStop: () -> Unit, onAnswerNow: () -> Unit,
+    onCancelQueued: () -> Unit,
 ) {
     val sub = MaterialTheme.colorScheme.onSurfaceVariant
     when (m.status) {
@@ -390,6 +424,10 @@ private fun AssistantBody(
                 Text(
                     String.format(Locale.US, "Writing · %.1f tok/s", m.tokPerSec), fontSize = 12.sp, color = sub,
                 )
+                // Only while it is still thinking: the answer has not begun.
+                if (m.reasoning.isNotEmpty() && m.text.isEmpty()) {
+                    TextButton(onClick = onAnswerNow) { Text("Answer now") }
+                }
                 TextButton(onClick = onStop) { Text("Stop") }
             }
         }
@@ -399,8 +437,20 @@ private fun AssistantBody(
             TextButton(onClick = onRetry) { Text("Retry") }
         }
         else -> { // DONE, CANCELLED
-            if (m.reasoning.isNotEmpty()) ReasoningBlock(m.reasoning, initiallyExpanded = false)
+            if (m.reasoning.isNotEmpty()) {
+                ReasoningBlock(
+                    m.reasoning, initiallyExpanded = false,
+                    note = if (m.thinkingCut) "cut at ${m.thinkingTokens} tokens" else null,
+                )
+            }
             if (m.text.isNotEmpty()) MarkdownText(m.text)
+            else if (m.status == MessageStatus.DONE && m.reasoning.isNotEmpty()) {
+                Text(
+                    "The model used the whole reply length thinking and did not answer. Choose a lower thinking " +
+                        "level in the menu, or turn thinking off, and regenerate.",
+                    fontSize = 13.sp, color = MaterialTheme.colorScheme.error,
+                )
+            }
             if (m.status == MessageStatus.CANCELLED) {
                 Text("Stopped", fontSize = 12.sp, color = sub)
                 TextButton(onClick = onRetry) { Text("Try again") }
@@ -412,7 +462,7 @@ private fun AssistantBody(
 }
 
 @Composable
-private fun ReasoningBlock(reasoning: String, initiallyExpanded: Boolean) {
+private fun ReasoningBlock(reasoning: String, initiallyExpanded: Boolean, note: String? = null) {
     var expanded by rememberSaveable { mutableStateOf(initiallyExpanded) }
     Surface(color = MaterialTheme.colorScheme.surface, shape = MaterialTheme.shapes.small, modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
@@ -421,6 +471,7 @@ private fun ReasoningBlock(reasoning: String, initiallyExpanded: Boolean) {
                 modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded },
             ) {
                 Text("Thinking", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (note != null) Text("· $note", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Text(if (expanded) "▾" else "▸", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             if (expanded) {

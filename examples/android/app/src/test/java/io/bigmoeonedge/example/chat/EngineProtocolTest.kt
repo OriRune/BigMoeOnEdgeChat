@@ -41,6 +41,27 @@ class EngineProtocolTest {
         assertFalse(req.contains('\n'))
     }
 
+    @Test fun theThinkingBudgetRidesTheRequestOnlyWhenThinking() {
+        val on = JSONObject(EngineProtocol.generate(1, "hi", 512, think = true, clearKv = false, thinkBudget = 256))
+        assertEquals(256, on.getInt("think_budget"))
+        // With thinking off the engine ignores a budget, so none is sent.
+        val off = JSONObject(EngineProtocol.generate(1, "hi", 512, think = false, clearKv = false, thinkBudget = 256))
+        assertFalse(off.has("think_budget"))
+        assertFalse(JSONObject(EngineProtocol.generate(1, "hi", 8, true, true)).has("think_budget"))
+    }
+
+    @Test fun doneReportsAThinkingCut() {
+        val p = EngineProtocol()
+        val e = p.parse(
+            """BMOE_DONE {"id":3,"cancelled":false,"tokens":2,"tok_s":2.0,"reasoning":"r","text":"t",""" +
+                """"history_dropped":0,"thinking_cut":true,"thinking_tokens":256}""",
+        ) as EngineEvent.Done
+        assertTrue(e.info.thinkingCut)
+        assertEquals(256, e.info.thinkingTokens)
+        val old = p.parse("""BMOE_DONE {"id":3,"cancelled":false,"tokens":2,"tok_s":2.0,"reasoning":"","text":"t"}""") as EngineEvent.Done
+        assertFalse(old.info.thinkingCut)
+    }
+
     @Test fun noHistoryMeansTheKeysAreAbsent() {
         val o = JSONObject(EngineProtocol.generate(1, "hi", 8, true, true))
         assertFalse(o.has("history_roles"))

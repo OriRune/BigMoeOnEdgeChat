@@ -1,6 +1,7 @@
 package io.bigmoeonedge.example.chat.data
 
 import androidx.room.withTransaction
+import io.bigmoeonedge.example.chat.ThinkLevel
 import kotlinx.coroutines.flow.Flow
 
 /** Wakes the engine process after the queue changed. */
@@ -40,12 +41,13 @@ class ChatRepository(
 
     suspend fun createConversation(
         modelPath: String, systemPrompt: String, thinking: Boolean, title: String = "New chat",
+        thinkLevel: ThinkLevel = ThinkLevel.DEFAULT,
     ): Long {
         val now = clock()
         return conversations.insert(
             ConversationEntity(
                 title = title, modelPath = modelPath, systemPrompt = systemPrompt, thinking = thinking,
-                createdAt = now, updatedAt = now, lastReadAt = now,
+                thinkLevel = thinkLevel.name, createdAt = now, updatedAt = now, lastReadAt = now,
             ),
         )
     }
@@ -159,6 +161,8 @@ class ChatRepository(
     suspend fun deleteConversation(id: Long) = conversations.delete(id)
     suspend fun rename(id: Long, title: String) = conversations.rename(id, title.trim().ifEmpty { "Chat" })
     suspend fun setModel(id: Long, modelPath: String) = conversations.setModel(id, modelPath)
+    suspend fun setThinking(id: Long, thinking: Boolean, level: ThinkLevel) =
+        conversations.setThinking(id, thinking, level.name)
     suspend fun markRead(id: Long) = conversations.markRead(id, clock())
 
     /** Written by the UI in onResume / onPause so the engine process knows whether to notify. */

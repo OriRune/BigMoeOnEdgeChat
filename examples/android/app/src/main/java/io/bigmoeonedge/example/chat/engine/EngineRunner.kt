@@ -1,5 +1,6 @@
 package io.bigmoeonedge.example.chat.engine
 
+import io.bigmoeonedge.example.chat.ThinkLevel
 import io.bigmoeonedge.example.chat.data.ChatDb
 import io.bigmoeonedge.example.chat.data.ConversationEntity
 import io.bigmoeonedge.example.chat.data.EngineStateName
@@ -170,6 +171,11 @@ class EngineRunner(
             val m = db.messages().get(messageId)
             if (m?.status == MessageStatus.QUEUED) db.messages().setStatus(messageId, MessageStatus.CANCELLED)
         }
+    }
+
+    /** End the thinking of the reply [messageId] if it is the one running, and let the model answer. */
+    fun endThinking(messageId: Long) {
+        if (activeId == messageId) live?.backend?.send(EngineProtocol.END_THINKING)
     }
 
     /** Stop a running scan; its finished cells are kept and it can be resumed. */
@@ -394,9 +400,10 @@ class EngineRunner(
             status(EngineStateName.BUSY, "Reading the conversation…", activeId = m.id)
             host.foregroundText("Reading the conversation…")
             val id = l.nextId++
+            val turn = EngineConfig.turnBudget(cfg.nPredict, cfg.ctx, conv.thinking, ThinkLevel.of(conv.thinkLevel))
             val req = EngineProtocol.generate(
-                id = id, prompt = job.prompt, nPredict = cfg.nPredict, think = conv.thinking, clearKv = false,
-                history = job.history, fitCtx = true,
+                id = id, prompt = job.prompt, nPredict = turn.nPredict, think = conv.thinking, clearKv = false,
+                history = job.history, fitCtx = true, thinkBudget = turn.thinkBudget,
             )
             if (!l.backend.send(req)) throw SessionFailed("The engine is not running.")
             stream(l, m, conv, cfg, job)
@@ -473,6 +480,7 @@ class EngineRunner(
                             m.id, info.text, info.reasoning, st, null, info.tokens, info.tokS, info.prefillS,
                             info.metricsLine(cfg.ctx), clock(),
                         )
+                        if (info.thinkingCut) msgs.setThinkingInfo(m.id, true, info.thinkingTokens)
                         if (st == MessageStatus.DONE) {
                             msgs.replaceOutOfContext(conv.id, HistoryBuilder.droppedRows(job, info.historyDropped))
                         }

@@ -88,8 +88,43 @@ class EngineRunnerTest {
         // a was queued first, and its reply saw both of its messages.
         assertTrue(ra.finishedAt!! <= rb.finishedAt!!)
         assertTrue(ra.text, ra.text.contains("A one") && ra.text.contains("A two"))
+        // The callback follows the status write by a few database calls.
+        until("both reply callbacks") { finished.size == 2 }
         assertEquals(listOf(ra.id, rb.id), finished.toList())
         assertEquals(1, backends)
+    }
+
+    @Test fun aThinkingChatCutsTheReasoningAtItsBudgetAndStillAnswers() = runBlocking {
+        val c = repo.createConversation("/m.gguf", "", true, thinkLevel = ThinkLevel.LOW)
+        runner.start()
+        repo.send(c, "think hard [thinklong]")
+        until("the reply") { replies(c).singleOrNull()?.status == MessageStatus.DONE }
+        val r = replies(c).single()
+        assertTrue(r.thinkingCut)
+        assertEquals(ThinkLevel.LOW.tokens, r.thinkingTokens)
+        assertTrue(r.reasoning, r.reasoning.contains("idea${ThinkLevel.LOW.tokens} ") && !r.reasoning.contains("idea${ThinkLevel.LOW.tokens + 1} "))
+        assertTrue("the answer follows the cut", r.text.isNotEmpty())
+    }
+
+    @Test fun answerNowEndsTheThinkingAndTheModelAnswers() = runBlocking {
+        val c = repo.createConversation("/m.gguf", "", true, thinkLevel = ThinkLevel.HIGH)
+        runner.start()
+        repo.send(c, "think hard [thinklong]")
+        until("it is thinking") { replies(c).singleOrNull()?.reasoning?.isNotEmpty() == true }
+        runner.endThinking(replies(c).single().id)
+        until("the reply") { replies(c).single().status == MessageStatus.DONE }
+        val r = replies(c).single()
+        assertTrue(r.thinkingCut)
+        assertTrue("cut well before the budget", r.thinkingTokens in 1 until 600)
+        assertTrue(r.text.isNotEmpty())
+    }
+
+    @Test fun aThinkingChatWithoutACutIsNotMarked() = runBlocking {
+        val c = repo.createConversation("/m.gguf", "", true)
+        runner.start()
+        repo.send(c, "quick")
+        until("the reply") { replies(c).singleOrNull()?.status == MessageStatus.DONE }
+        assertEquals(false, replies(c).single().thinkingCut)
     }
 
     @Test fun theSecondTurnIsSeededWithTheFirst() = runBlocking {

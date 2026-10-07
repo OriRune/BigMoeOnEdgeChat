@@ -80,4 +80,31 @@ class EngineConfigTest {
         assertNotEquals(base, EngineConfig.signature(s, chat, "/other.gguf"))
         assertFalse(base.contains("/cli"))
     }
+
+    @Test fun thinkingOffAsksForTheReplyLengthAndNoBudget() {
+        val t = EngineConfig.turnBudget(1024, 2048, thinking = false, level = ThinkLevel.HIGH)
+        assertEquals(1024, t.nPredict)
+        assertEquals(null, t.thinkBudget)
+    }
+
+    @Test fun thinkingComesOnTopOfTheReplyLength() {
+        val t = EngineConfig.turnBudget(1024, 8192, thinking = true, level = ThinkLevel.MEDIUM)
+        assertEquals(1024, t.thinkBudget)
+        assertEquals(2048, t.nPredict)
+    }
+
+    @Test fun aSmallContextLimitsHowMuchThinkingTakes() {
+        // 2048 tokens of context: thinking gets at most a quarter, whatever the level says.
+        val t = EngineConfig.turnBudget(1024, 2048, thinking = true, level = ThinkLevel.HIGH)
+        assertEquals(512, t.thinkBudget)
+        assertEquals(1536, t.nPredict)
+    }
+
+    @Test fun theLevelsAreOrderedAndLowIsTheDefault() {
+        assertEquals(ThinkLevel.LOW, ThinkLevel.DEFAULT)
+        assertEquals(ThinkLevel.DEFAULT, ThinkLevel.of(null))
+        assertEquals(ThinkLevel.DEFAULT, ThinkLevel.of("nonsense"))
+        assertEquals(ThinkLevel.HIGH, ThinkLevel.of("HIGH"))
+        assertTrue(ThinkLevel.LOW.tokens < ThinkLevel.MEDIUM.tokens && ThinkLevel.MEDIUM.tokens < ThinkLevel.HIGH.tokens)
+    }
 }

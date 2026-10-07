@@ -26,6 +26,8 @@ data class DoneInfo(
     val text: String,
     val reasoning: String,
     val historyDropped: Int,
+    val thinkingCut: Boolean = false,
+    val thinkingTokens: Int = 0,
 ) {
     /** The rate the user waits for: decode time plus the gap between decodes. */
     val effectiveTokS: Double
@@ -122,11 +124,16 @@ class EngineProtocol {
             text = text.ifEmpty { live.text },
             reasoning = reasoning.ifEmpty { live.reasoning },
             historyDropped = o.optInt("history_dropped", 0),
+            thinkingCut = o.optBoolean("thinking_cut", false),
+            thinkingTokens = o.optInt("thinking_tokens", 0),
         )
     }
 
     companion object {
         const val CANCEL = """{"cmd":"cancel"}"""
+
+        /** End the reasoning of the reply being written now and let the model answer. */
+        const val END_THINKING = """{"cmd":"end_thinking"}"""
         const val CLOSE = """{"cmd":"close"}"""
 
         /** [history] non-null seeds the engine's conversation (replace_history) before [prompt]. */
@@ -138,6 +145,8 @@ class EngineProtocol {
             clearKv: Boolean,
             history: List<EngineMessage>? = null,
             fitCtx: Boolean = false,
+            // Tokens the model may think for (think = true); null = no limit. nPredict counts them.
+            thinkBudget: Int? = null,
         ): String = buildString {
             append("""{"cmd":"generate","id":""").append(id)
             append(""","n_predict":""").append(nPredict)
@@ -151,6 +160,7 @@ class EngineProtocol {
                 append("]")
             }
             if (fitCtx) append(""","fit_ctx":true""")
+            if (think && thinkBudget != null) append(""","think_budget":""").append(thinkBudget)
             append(""","prompt":"""").append(jsonEscape(prompt)).append("\"}")
         }
 

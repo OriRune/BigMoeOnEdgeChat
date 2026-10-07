@@ -112,6 +112,7 @@ open class EngineService : Service(), EngineHost {
         when (intent?.action) {
             ACTION_KICK -> runner.kick()
             ACTION_CANCEL -> runner.cancel(intent.getLongExtra(EXTRA_MESSAGE_ID, -1))
+            ACTION_END_THINKING -> runner.endThinking(intent.getLongExtra(EXTRA_MESSAGE_ID, -1))
             ACTION_STOP_ACTIVE -> runner.cancelActive()
             ACTION_REPLY -> {
                 val conv = intent.getLongExtra(EXTRA_CONVERSATION_ID, -1)
@@ -451,6 +452,7 @@ open class EngineService : Service(), EngineHost {
     companion object {
         const val ACTION_KICK = "io.bigmoeonedge.example.chat.KICK"
         const val ACTION_CANCEL = "io.bigmoeonedge.example.chat.CANCEL"
+        const val ACTION_END_THINKING = "io.bigmoeonedge.example.chat.END_THINKING"
         const val ACTION_STOP_ACTIVE = "io.bigmoeonedge.example.chat.STOP_ACTIVE"
         const val ACTION_UNLOAD = "io.bigmoeonedge.example.chat.UNLOAD"
         const val ACTION_SUSPEND = "io.bigmoeonedge.example.chat.SUSPEND"

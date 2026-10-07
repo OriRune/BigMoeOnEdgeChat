@@ -68,16 +68,18 @@ pauses the chat queue and frees the model (`EngineClient.suspend()`), and return
   and an unread dot. A banner shows what the engine is doing (loading, writing, paused, error with
   Retry). Long-press a row to rename or delete; the magnifier searches titles and message text.
 - **New chat**: pick a model (the last one used is preselected), an optional system prompt and the
-  thinking switch. The title is the first 40 characters of the first message until renamed.
+  thinking level (Off, Low, Medium or High; see *Thinking* below). The title is the first 40 characters of the first message until renamed.
 - **Thread**: bubbles with the newest at the bottom. A reply that is still being written is plain
   text and becomes Markdown when it is done (re-parsing Markdown per update is what froze the lab
   screen). Reasoning is a collapsible block. States: *Queued · N ahead*, *Reading the conversation…*
   (or the loading text while the model loads), *Writing · x tok/s* with Stop, *Failed* with Retry.
+  While the model is still thinking, **Answer now** ends the reasoning and makes it answer.
   Long-press a bubble: Copy, Delete, Regenerate (last reply), Edit & resend (last message of
   yours). The composer is never disabled: sending while a reply is writing queues it. *Attach*
   inserts a text file (up to 64 KB) into the box. A divider marks where the model's memory begins
   when older messages no longer fit the context.
-- **Thread menu**: Rename, Delete chat, **Change model** (applies from the next reply, which reloads
+- **Thread menu**: Rename, Delete chat, **Thinking** (Off, Low, Medium, High; from the next reply),
+  **Change model** (applies from the next reply, which reloads
   the model first if it differs from the loaded one) and **Export as Markdown** (share sheet; the
   file holds the finished turns, with reasoning folded into a `<details>` block).
 - **Chats menu**: **Unload model now** frees the memory at once; the banner then reads "Model
@@ -178,6 +180,19 @@ baseline or make it repeat finished cells.
   marks it failed ("Interrupted") with a Retry.
 - Low battery (< 15%, not charging) holds the queue when `pauseOnLowBattery` is on.
 
+## Thinking
+
+Qwen3.x and Gemma 4 read one on/off flag in their chat templates, so there is no "low effort" to ask
+for, and a model that thinks at under one token a second can spend a whole reply budget (and half an
+hour) inside its reasoning without ever answering. A chat's thinking level is therefore a token budget
+the engine enforces: after that many tokens of reasoning it writes the span's closing tag itself and
+the model answers from there (`think_budget`, see `docs/session.md`). Low is 256 tokens, Medium 1024,
+High 4096, and Low is the default for a chat that has thinking on. The budget comes on top of the reply
+length, so a long think cannot eat the answer; on a small context it is capped at a quarter of it
+(`EngineConfig.turnBudget`). A reply that was cut says so in its Thinking block ("cut at N tokens").
+**Answer now** makes the same cut by hand. A model whose template declares no reasoning span (LFM2.5,
+for one) is left alone, and its reply simply runs to the reply length.
+
 ## Settings
 
 `ChatSettings` (preferences file `chat_settings`; the UI writes, the engine process reads at the
@@ -203,6 +218,7 @@ adb shell am broadcast -n $R -a DUMP                                           #
 
 The fake engine (debug builds, `fakeEngine` setting) speaks the same protocol. A prompt ending in
 `[fail]` or `[crash]` makes it fail; `[slow]`, `[long]` and `[drop2]` change its pace, length and
-reported drops.
+reported drops; `[thinklong]` gives a thinking chat a 600-token reasoning span, which the thinking
+budget or *Answer now* cuts short.
 
 Changes are logged in [`CHANGELOG-fork.md`](../../CHANGELOG-fork.md).

@@ -66,6 +66,14 @@ class ThreadViewModel(private val app: Application, val conversationId: Long) : 
         viewModelScope.launch { repo.setModel(conversationId, path) }
     }
 
+    /** Applies from the next reply; the reply being written keeps the budget it started with. */
+    fun setThinking(choice: Int) {
+        viewModelScope.launch { repo.setThinking(conversationId, choice > 0, ThinkingChoices.level(choice)) }
+    }
+
+    /** End the model's thinking now and make it answer. */
+    fun answerNow(messageId: Long) = client.endThinking(messageId)
+
     /** Writes the conversation as Markdown and returns a content:// URI for the share sheet. */
     suspend fun exportMarkdown(): Pair<Uri, String>? = withContext(Dispatchers.IO) {
         val conv = repo.conversation(conversationId) ?: return@withContext null

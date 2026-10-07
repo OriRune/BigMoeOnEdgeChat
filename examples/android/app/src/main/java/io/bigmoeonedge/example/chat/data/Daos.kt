@@ -33,6 +33,9 @@ interface ConversationDao {
     @Query("UPDATE conversations SET modelPath = :modelPath WHERE id = :id")
     suspend fun setModel(id: Long, modelPath: String)
 
+    @Query("UPDATE conversations SET thinking = :thinking, thinkLevel = :level WHERE id = :id")
+    suspend fun setThinking(id: Long, thinking: Boolean, level: String)
+
     @Query("DELETE FROM conversations WHERE id = :id")
     suspend fun delete(id: Long)
 
@@ -114,6 +117,9 @@ interface MessageDao {
         id: Long, text: String, reasoning: String, status: String, error: String?, tokens: Int,
         tokPerSec: Double, prefillS: Double, metrics: String, finishedAt: Long,
     ): Int
+
+    @Query("UPDATE messages SET thinkingCut = :cut, thinkingTokens = :tokens WHERE id = :id")
+    suspend fun setThinkingInfo(id: Long, cut: Boolean, tokens: Int)
 
     @Query(
         "UPDATE messages SET status = 'QUEUED', error = NULL, text = '', reasoning = '', attempt = :attempt, " +

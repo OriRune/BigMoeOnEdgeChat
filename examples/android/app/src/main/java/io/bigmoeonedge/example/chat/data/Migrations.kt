@@ -27,3 +27,12 @@ val MIGRATION_2_3 = object : Migration(2, 3) {
         db.execSQL("ALTER TABLE `scan_runs` ADD COLUMN `currentJson` TEXT NOT NULL DEFAULT ''")
     }
 }
+
+/** Version 4 adds the chat's thinking level and, per reply, whether the engine cut the reasoning short. */
+val MIGRATION_3_4 = object : Migration(3, 4) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `conversations` ADD COLUMN `thinkLevel` TEXT NOT NULL DEFAULT 'LOW'")
+        db.execSQL("ALTER TABLE `messages` ADD COLUMN `thinkingCut` INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE `messages` ADD COLUMN `thinkingTokens` INTEGER NOT NULL DEFAULT 0")
+    }
+}

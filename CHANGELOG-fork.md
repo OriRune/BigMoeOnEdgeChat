@@ -4,6 +4,22 @@ Changes that exist only in this fork of [Helldez/BigMoeOnEdge](https://github.co
 Upstream's `CHANGELOG.md` is left alone so that merging `upstream/main` stays conflict-free; engine
 changes offered back upstream go there instead, per `AGENTS.md`.
 
+## [0.28.0-chat.8] - 2026-10-06
+
+### Added
+- **Thinking levels.** A chat with thinking on no longer risks spending its whole reply length
+  reasoning. The chat's level (Low 256 tokens, the default; Medium 1024; High 4096) is a budget the
+  engine enforces: after that many reasoning tokens it ends the reasoning and the model answers. The
+  budget comes on top of the reply length. Chosen in *New chat* and in the thread menu; a reply that
+  was cut says so in its Thinking block. **Answer now** ends the thinking of the reply being written,
+  and a reply that still ends with no answer says why. Needs the engine's `think_budget` and
+  `end_thinking` (`CHANGELOG.md`, 0.28.2).
+- Database version 4 (migration tested): the thinking level per chat, and per reply whether the
+  reasoning was cut and how long it was. Existing thinking chats become Low.
+
+### Changed
+- The thinking switch of *New chat* is a four-way choice (Off, Low, Medium, High).
+
 ## [0.28.0-chat.7] - 2026-10-06
 
 ### Added

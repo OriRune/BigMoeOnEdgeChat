@@ -6,6 +6,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import io.bigmoeonedge.example.chat.data.ChatDb
 import io.bigmoeonedge.example.chat.data.MIGRATION_1_2
 import io.bigmoeonedge.example.chat.data.MIGRATION_2_3
+import io.bigmoeonedge.example.chat.data.MIGRATION_3_4
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -61,6 +62,32 @@ class MigrationTest {
             c.moveToFirst()
             assertEquals("STOPPED", c.getString(0))
             assertEquals("", c.getString(1))
+        }
+    }
+
+    @Test fun existingThinkingChatsBecomeLowAndRepliesAreNotCut() {
+        helper.createDatabase("mig3", 3).apply {
+            execSQL(
+                "INSERT INTO conversations (title, modelPath, systemPrompt, thinking, createdAt, updatedAt, lastReadAt) " +
+                    "VALUES ('thinker', '/m.gguf', '', 1, 1, 1, 1)",
+            )
+            execSQL(
+                "INSERT INTO messages (conversationId, role, text, reasoning, status, tokens, tokPerSec, prefillS, metrics, " +
+                    "outOfContext, attempt, createdAt, queuedAt) VALUES (1, 'assistant', 'hi', 'hmm', 'DONE', 0, 0, 0, '', 0, 0, 1, 1)",
+            )
+            close()
+        }
+        val db = helper.runMigrationsAndValidate("mig3", 4, true, MIGRATION_3_4)
+        db.query("SELECT thinking, thinkLevel FROM conversations").use { c ->
+            c.moveToFirst()
+            assertEquals(1, c.getInt(0))
+            assertEquals("LOW", c.getString(1))
+        }
+        db.query("SELECT text, thinkingCut, thinkingTokens FROM messages").use { c ->
+            c.moveToFirst()
+            assertEquals("hi", c.getString(0))
+            assertEquals(0, c.getInt(1))
+            assertEquals(0, c.getInt(2))
         }
     }
 }

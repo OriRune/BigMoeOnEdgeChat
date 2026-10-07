@@ -52,8 +52,8 @@ android {
         applicationId 'io.github.orirune.bmoechat'
         minSdk 29
         targetSdk 34
-        versionCode 50
-        versionName '0.28.0-chat.7'
+        versionCode 51
+        versionName '0.28.0-chat.8'
         buildConfigField 'String', 'GIT_SHA', "\"${gitSha}\""
         testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
         ndk {

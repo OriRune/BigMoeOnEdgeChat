@@ -35,8 +35,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.bigmoeonedge.example.Hint
 import io.bigmoeonedge.example.LabeledDropdown
 import io.bigmoeonedge.example.ModelManager
-import io.bigmoeonedge.example.SwitchRow
 import io.bigmoeonedge.example.chat.ChatFormat
+import io.bigmoeonedge.example.chat.ThinkLevel
 import io.bigmoeonedge.example.requestSharedStorageAccess
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -45,7 +45,8 @@ fun NewChatScreen(vm: NewChatViewModel, onBack: () -> Unit, onCreated: (Long) ->
     val ctx = LocalContext.current
     val st by vm.state.collectAsStateWithLifecycle()
     var system by rememberSaveable { mutableStateOf("") }
-    var thinking by rememberSaveable { mutableStateOf(false) }
+    // 0 = off, then the levels in order.
+    var thinkingChoice by rememberSaveable { mutableStateOf(0) }
 
     Scaffold(
         topBar = {
@@ -89,15 +90,31 @@ fun NewChatScreen(vm: NewChatViewModel, onBack: () -> Unit, onCreated: (Long) ->
                 label = { Text("System prompt (optional)") }, minLines = 2, maxLines = 6,
                 modifier = Modifier.fillMaxWidth(),
             )
-            SwitchRow(
-                "Thinking", "Let the model reason before it answers. Slower, and not every model can turn it off.",
-                thinking,
-            ) { thinking = it }
+            LabeledDropdown(
+                label = "Thinking",
+                options = ThinkingChoices.labels,
+                selected = thinkingChoice,
+                onSelect = { thinkingChoice = it },
+            )
+            Hint(
+                "Lets the model reason before it answers. The level is how long it may think before it has to " +
+                    "answer: slower models take minutes for even the lowest. Not every model can turn thinking off.",
+            )
             Button(
-                onClick = { vm.create(system, thinking, onCreated) },
+                onClick = { vm.create(system, thinkingChoice > 0, ThinkingChoices.level(thinkingChoice), onCreated) },
                 enabled = st.selected != null,
                 modifier = Modifier.fillMaxWidth(),
             ) { Text("Start chat") }
         }
     }
+}
+
+/** The thinking choices of a chat, as one list: Off, then the levels. */
+object ThinkingChoices {
+    val labels: List<String> = listOf("Off") + ThinkLevel.entries.map { "${it.label} (up to ${it.tokens} tokens)" }
+
+    /** The level of choice [index] (0 = off, which reads as the default level). */
+    fun level(index: Int): ThinkLevel = ThinkLevel.entries.getOrNull(index - 1) ?: ThinkLevel.DEFAULT
+
+    fun index(thinking: Boolean, level: ThinkLevel): Int = if (!thinking) 0 else level.ordinal + 1
 }

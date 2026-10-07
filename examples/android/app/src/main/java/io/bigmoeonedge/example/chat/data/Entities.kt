@@ -34,6 +34,8 @@ data class ConversationEntity(
     val modelPath: String,
     val systemPrompt: String = "",
     val thinking: Boolean = false,
+    // How long the model may think when [thinking] is on: a [io.bigmoeonedge.example.chat.ThinkLevel] name.
+    val thinkLevel: String = "LOW",
     val createdAt: Long,
     val updatedAt: Long,
     // The newest reply the user has seen. A DONE assistant message finished after it is "unread".
@@ -73,6 +75,10 @@ data class MessageEntity(
     val finishedAt: Long? = null,
     // FIFO key across conversations: when this reply joined the queue (not where it sits on screen).
     val queuedAt: Long = createdAt,
+    // The engine ended the reasoning (the chat's thinking budget, or Answer now) instead of the model,
+    // and how many tokens the reasoning held.
+    val thinkingCut: Boolean = false,
+    val thinkingTokens: Int = 0,
 )
 
 /** Single row (id 0): the engine process's state, for the UI to show. */
