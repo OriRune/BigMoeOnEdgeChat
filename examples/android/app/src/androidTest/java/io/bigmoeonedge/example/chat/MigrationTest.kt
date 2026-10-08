@@ -1,0 +1,114 @@
+package io.bigmoeonedge.example.chat
+
+import androidx.room.testing.MigrationTestHelper
+import androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
+import androidx.test.platform.app.InstrumentationRegistry
+import io.bigmoeonedge.example.chat.data.ChatDb
+import io.bigmoeonedge.example.chat.data.MIGRATION_1_2
+import io.bigmoeonedge.example.chat.data.MIGRATION_2_3
+import io.bigmoeonedge.example.chat.data.MIGRATION_3_4
+import io.bigmoeonedge.example.chat.data.MIGRATION_4_5
+import org.junit.Assert.assertEquals
+import org.junit.Rule
+import org.junit.Test
+
+class MigrationTest {
+    @get:Rule
+    val helper = MigrationTestHelper(
+        InstrumentationRegistry.getInstrumentation(), ChatDb::class.java, emptyList(), FrameworkSQLiteOpenHelperFactory(),
+    )
+
+    @Test fun version1ChatsSurviveTheMigrationToTheScanTables() {
+        helper.createDatabase("mig", 1).apply {
+            execSQL(
+                "INSERT INTO conversations (title, modelPath, systemPrompt, thinking, createdAt, updatedAt, lastReadAt) " +
+                    "VALUES ('kept', '/m.gguf', '', 0, 1, 1, 1)",
+            )
+            execSQL(
+                "INSERT INTO messages (conversationId, role, text, reasoning, status, tokens, tokPerSec, prefillS, metrics, " +
+                    "outOfContext, attempt, createdAt, queuedAt) VALUES (1, 'user', 'hello', '', 'DONE', 0, 0, 0, '', 0, 0, 1, 1)",
+            )
+            close()
+        }
+        val db = helper.runMigrationsAndValidate("mig", 2, true, MIGRATION_1_2)
+        db.query("SELECT title FROM conversations").use { c ->
+            c.moveToFirst()
+            assertEquals("kept", c.getString(0))
+        }
+        db.query("SELECT text FROM messages").use { c ->
+            c.moveToFirst()
+            assertEquals("hello", c.getString(0))
+        }
+        // The new tables exist and are empty.
+        for (t in listOf("scan_runs", "scan_cells", "model_profiles")) {
+            db.query("SELECT COUNT(*) FROM $t").use { c ->
+                c.moveToFirst()
+                assertEquals(0, c.getInt(0))
+            }
+        }
+    }
+
+    @Test fun aScanRunFromVersion2GainsAnEmptyBaseline() {
+        helper.createDatabase("mig2", 2).apply {
+            execSQL(
+                "INSERT INTO scan_runs (modelPath, startedAt, status, includeLossy, includeSustained, sustainedMinutes, " +
+                    "referenceHeadroom, referenceThermal, referenceBatteryC, referenceMemAvailMb, startedWarm, stage, detail, " +
+                    "note, recommendedJson, recommendedLabel, verdict, confirmed) " +
+                    "VALUES ('/m.gguf', 1, 'STOPPED', 0, 1, 12, -1.0, 0, -1.0, 0, 0, '', '', '', '', '', '', 0)",
+            )
+            close()
+        }
+        val db = helper.runMigrationsAndValidate("mig2", 3, true, MIGRATION_2_3)
+        db.query("SELECT status, currentJson FROM scan_runs").use { c ->
+            c.moveToFirst()
+            assertEquals("STOPPED", c.getString(0))
+            assertEquals("", c.getString(1))
+        }
+    }
+
+    @Test fun existingThinkingChatsBecomeLowAndRepliesAreNotCut() {
+        helper.createDatabase("mig3", 3).apply {
+            execSQL(
+                "INSERT INTO conversations (title, modelPath, systemPrompt, thinking, createdAt, updatedAt, lastReadAt) " +
+                    "VALUES ('thinker', '/m.gguf', '', 1, 1, 1, 1)",
+            )
+            execSQL(
+                "INSERT INTO messages (conversationId, role, text, reasoning, status, tokens, tokPerSec, prefillS, metrics, " +
+                    "outOfContext, attempt, createdAt, queuedAt) VALUES (1, 'assistant', 'hi', 'hmm', 'DONE', 0, 0, 0, '', 0, 0, 1, 1)",
+            )
+            close()
+        }
+        val db = helper.runMigrationsAndValidate("mig3", 4, true, MIGRATION_3_4)
+        db.query("SELECT thinking, thinkLevel FROM conversations").use { c ->
+            c.moveToFirst()
+            assertEquals(1, c.getInt(0))
+            assertEquals("LOW", c.getString(1))
+        }
+        db.query("SELECT text, thinkingCut, thinkingTokens FROM messages").use { c ->
+            c.moveToFirst()
+            assertEquals("hi", c.getString(0))
+            assertEquals(0, c.getInt(1))
+            assertEquals(0, c.getInt(2))
+        }
+    }
+
+    @Test fun aScanRunFromVersion4HasNoLiveStateYet() {
+        helper.createDatabase("mig4", 4).apply {
+            execSQL(
+                "INSERT INTO scan_runs (modelPath, startedAt, status, includeLossy, includeSustained, sustainedMinutes, " +
+                    "referenceHeadroom, referenceThermal, referenceBatteryC, referenceMemAvailMb, startedWarm, stage, detail, " +
+                    "note, recommendedJson, recommendedLabel, verdict, confirmed, currentJson) " +
+                    "VALUES ('/m.gguf', 1, 'DONE', 0, 1, 12, -1.0, 0, -1.0, 0, 0, '', '', '', '', '', '', 0, '{}')",
+            )
+            close()
+        }
+        val db = helper.runMigrationsAndValidate("mig4", 5, true, MIGRATION_4_5)
+        db.query("SELECT status, currentJson, phase, phaseSince, heartbeatAt, liveTokens, liveTokS, liveTarget, phaseTotalMs FROM scan_runs").use { c ->
+            c.moveToFirst()
+            assertEquals("DONE", c.getString(0))
+            assertEquals("{}", c.getString(1))
+            assertEquals("", c.getString(2))
+            for (i in 3..8) assertEquals(0.0, c.getDouble(i), 0.0)
+        }
+    }
+}

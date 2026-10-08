@@ -258,6 +258,7 @@ struct SessionCmd {
     bool history_mismatch = false;
     std::vector<std::string> history_roles, history_contents;
     bool fit_ctx = false;
+    int think_budget = -1;
     // decide only (bmoe/decide.h)
     std::string prefix, suffix;
     std::vector<std::string> choices;
@@ -350,6 +351,11 @@ static int run_session_loop(const RunConfig & cfg,
                 session->cancel();
                 continue;
             }
+            // Like cancel, applied at once: it only matters to the generation already running.
+            if (cmd == "end_thinking") {
+                session->end_thinking();
+                continue;
+            }
             SessionCmd c;
             if (cmd == "close") {
                 c.kind = SessionCmd::kClose;
@@ -361,6 +367,7 @@ static int run_session_loop(const RunConfig & cfg,
                 c.think = json_get_bool(line, "think", cfg.think);
                 c.clear_kv = json_get_bool(line, "clear_kv", true);
                 c.fit_ctx = json_get_bool(line, "fit_ctx", false);
+                c.think_budget = json_get_int(line, "think_budget", -1);
                 // The roles array marks a seeded history, empty or not, so an app can ask for
                 // "no history" explicitly.
                 if (json_get_string_array(line, "history_roles", c.history_roles)) {
@@ -437,6 +444,7 @@ static int run_session_loop(const RunConfig & cfg,
         for (size_t i = 0; i < cmd.history_roles.size(); ++i)
             req.history.push_back({cmd.history_roles[i], cmd.history_contents[i]});
         req.fit_ctx = cmd.fit_ctx;
+        req.think_budget = cmd.think_budget;
         req.render_text = true; // the line protocol carries the parsed answer on every token
 
         ProgressDelta pd; // fresh per generation: the first line extends the empty state
@@ -469,7 +477,8 @@ static int run_session_loop(const RunConfig & cfg,
                     "\"prefill_dev_stall_s\":%.3f,"
                     "\"token_demand_mib\":%.1f,\"mtp_drafted\":%lld,\"mtp_accepted\":%lld,\"mtp_decodes\":%lld,"
                     "\"mtp_draft_s_tok\":%.4f,\"drafted_steps\":%lld,\"loop_overhead_s_tok\":%.4f,"
-                    "\"reasoning\":\"%s\",\"text\":\"%s\",\"history_dropped\":%d}\n",
+                    "\"reasoning\":\"%s\",\"text\":\"%s\",\"history_dropped\":%d,"
+                    "\"thinking_cut\":%s,\"thinking_tokens\":%d}\n",
                     cmd.id, r.cancelled ? "true" : "false", s.n_generated, s.tokens_per_second, s.prefill_seconds,
                     (s.prefill_seconds > 0 ? s.n_prompt / s.prefill_seconds : 0.0), s.load_seconds, s.cache_hit_pct,
                     s.n_prompt, s.n_past, s.moe_compute_s_per_token, s.moe_io_s_per_token, s.cache_resident_mib,
@@ -479,7 +488,8 @@ static int run_session_loop(const RunConfig & cfg,
                     s.prefill_device_nodes, s.prefill_device_read_mib, s.prefill_device_stall_seconds,
                     s.token_demand_mib, s.mtp_drafted, s.mtp_accepted, s.mtp_decodes, s.mtp_draft_s_per_token,
                     s.drafted_steps, s.loop_overhead_s_per_token, json_escape(r.reasoning_text).c_str(),
-                    json_escape(r.generated_text).c_str(), r.history_dropped);
+                    json_escape(r.generated_text).c_str(), r.history_dropped, r.thinking_cut ? "true" : "false",
+                    r.thinking_tokens);
         std::fflush(stdout);
     }
 

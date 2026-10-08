@@ -4,5 +4,5 @@
          manifest reads it. Everything the UI shows is written where it is shown, which for a
          single-locale demo keeps the wording next to the control it explains; the five entries
          that used to sit here described a UI two rewrites ago and nothing referenced them. -->
-    <string name="app_name">BigMoeOnEdge</string>
+    <string name="app_name">BigMoe Chat</string>
 </resources>

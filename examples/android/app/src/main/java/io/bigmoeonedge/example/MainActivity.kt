@@ -50,6 +50,16 @@ class MainActivity : ComponentActivity() {
     private val requestNotif =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
+    override fun onStart() {
+        super.onStart()
+        io.bigmoeonedge.example.chat.AppForeground.activityStarted()
+    }
+
+    override fun onStop() {
+        io.bigmoeonedge.example.chat.AppForeground.activityStopped()
+        super.onStop()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&

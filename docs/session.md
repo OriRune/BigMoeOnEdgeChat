@@ -81,7 +81,9 @@ out of the raw stream and carries it in its own field (`TokenMetrics`/`RunResult
 `delta_reasoning` on `BMOE_PROGRESS`, `reasoning` on `BMOE_DONE`) rather than dropping it. The answer text stays free of
 it either way, so the byte-identity gates are unaffected; a caller that wants to show the thinking
 reads the separate field. The parser wiring lives in `core/src/engine/chat_parse.cpp`
-(see [seam.md](seam.md)).
+(see [seam.md](seam.md)). A model that writes the span's closing tag several times in a row would make
+the parser return nothing at all, so the text handed to it keeps the first closer and drops the
+repeats (`collapse_repeated_ends`); the raw generation is never edited.
 
 ## Cancel
 
@@ -91,6 +93,24 @@ overlap alike). It leaves the model and cache intact; the returned `RunResult` h
 true`. In chat mode a cancel **rolls the turn back** to the reused prefix (dropping this turn's KV
 and un-appending the user message) so prior turns stay usable and the conversation can continue.
 Cancel is distinct from a fatal streaming error, which is sticky and ends the session.
+
+## Thinking budget
+
+A reasoning model can spend a whole reply budget inside its reasoning and never answer, and the common
+templates (Qwen3.x, Gemma 4) read only an on/off flag, so there is no "low effort" to request.
+`GenerateRequest::think_budget` therefore limits the tokens inside the model's reasoning span: when it
+has run that long the engine forces the span's closing tag and the model continues past it, into its
+answer. `Session::end_thinking()` makes the same cut at once (thread-safe, like `cancel()`; it is
+cleared at the start of every `generate()`, and does nothing once the span has closed). The result
+reports `RunResult::thinking_cut` and `thinking_tokens`, and the answer is committed to the history
+with the shortened reasoning like any other turn.
+
+`n_predict` counts every generated token, reasoning included, so a caller that wants an answer of up to
+A tokens after at most T tokens of thinking sends `n_predict = T + A`. The cut waits for the end of a
+multi-byte character, and speculative drafting pauses while the tag is written, so the tag itself is
+never drafted past; a group of drafts already in flight can overshoot the budget by up to
+`draft_max` tokens. With think off, with no budget and no request, or on a model whose template
+declares no reasoning span, nothing changes.
 
 ## Fixed context
 

@@ -1,0 +1,915 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 5,
+    "identityHash": "d9fab1023c523d464ca1cb05eda1b995",
+    "entities": [
+      {
+        "tableName": "conversations",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `title` TEXT NOT NULL, `modelPath` TEXT NOT NULL, `systemPrompt` TEXT NOT NULL, `thinking` INTEGER NOT NULL, `thinkLevel` TEXT NOT NULL, `createdAt` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, `lastReadAt` INTEGER NOT NULL)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "title",
+            "columnName": "title",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "modelPath",
+            "columnName": "modelPath",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "systemPrompt",
+            "columnName": "systemPrompt",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "thinking",
+            "columnName": "thinking",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "thinkLevel",
+            "columnName": "thinkLevel",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "createdAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updatedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastReadAt",
+            "columnName": "lastReadAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "messages",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `conversationId` INTEGER NOT NULL, `role` TEXT NOT NULL, `text` TEXT NOT NULL, `reasoning` TEXT NOT NULL, `status` TEXT NOT NULL, `error` TEXT, `tokens` INTEGER NOT NULL, `tokPerSec` REAL NOT NULL, `prefillS` REAL NOT NULL, `metrics` TEXT NOT NULL, `outOfContext` INTEGER NOT NULL, `attempt` INTEGER NOT NULL, `createdAt` INTEGER NOT NULL, `finishedAt` INTEGER, `queuedAt` INTEGER NOT NULL, `thinkingCut` INTEGER NOT NULL, `thinkingTokens` INTEGER NOT NULL, FOREIGN KEY(`conversationId`) REFERENCES `conversations`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "conversationId",
+            "columnName": "conversationId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "role",
+            "columnName": "role",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "text",
+            "columnName": "text",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "reasoning",
+            "columnName": "reasoning",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "status",
+            "columnName": "status",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "error",
+            "columnName": "error",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "tokens",
+            "columnName": "tokens",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "tokPerSec",
+            "columnName": "tokPerSec",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "prefillS",
+            "columnName": "prefillS",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "metrics",
+            "columnName": "metrics",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "outOfContext",
+            "columnName": "outOfContext",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "attempt",
+            "columnName": "attempt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "createdAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "finishedAt",
+            "columnName": "finishedAt",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "queuedAt",
+            "columnName": "queuedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "thinkingCut",
+            "columnName": "thinkingCut",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "thinkingTokens",
+            "columnName": "thinkingTokens",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_messages_conversationId",
+            "unique": false,
+            "columnNames": [
+              "conversationId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_messages_conversationId` ON `${TABLE_NAME}` (`conversationId`)"
+          },
+          {
+            "name": "index_messages_status",
+            "unique": false,
+            "columnNames": [
+              "status"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_messages_status` ON `${TABLE_NAME}` (`status`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "conversations",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "conversationId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "engine_status",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER NOT NULL, `state` TEXT NOT NULL, `modelPath` TEXT NOT NULL, `sessionSig` TEXT NOT NULL, `activeMessageId` INTEGER, `step` INTEGER NOT NULL, `tokPerSec` REAL NOT NULL, `thermalStatus` INTEGER NOT NULL, `ioMode` TEXT NOT NULL, `lastError` TEXT, `pausedReason` TEXT, `detail` TEXT NOT NULL, `updatedAt` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "state",
+            "columnName": "state",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "modelPath",
+            "columnName": "modelPath",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sessionSig",
+            "columnName": "sessionSig",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "activeMessageId",
+            "columnName": "activeMessageId",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "step",
+            "columnName": "step",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "tokPerSec",
+            "columnName": "tokPerSec",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "thermalStatus",
+            "columnName": "thermalStatus",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "ioMode",
+            "columnName": "ioMode",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastError",
+            "columnName": "lastError",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "pausedReason",
+            "columnName": "pausedReason",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "detail",
+            "columnName": "detail",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updatedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "ui_presence",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER NOT NULL, `visibleConversationId` INTEGER, `updatedAt` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "visibleConversationId",
+            "columnName": "visibleConversationId",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updatedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "scan_runs",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `modelPath` TEXT NOT NULL, `startedAt` INTEGER NOT NULL, `finishedAt` INTEGER, `status` TEXT NOT NULL, `includeLossy` INTEGER NOT NULL, `includeSustained` INTEGER NOT NULL, `sustainedMinutes` INTEGER NOT NULL, `referenceHeadroom` REAL NOT NULL, `referenceThermal` INTEGER NOT NULL, `referenceBatteryC` REAL NOT NULL, `referenceMemAvailMb` INTEGER NOT NULL, `startedWarm` INTEGER NOT NULL, `stage` TEXT NOT NULL, `detail` TEXT NOT NULL, `note` TEXT NOT NULL, `recommendedJson` TEXT NOT NULL, `recommendedLabel` TEXT NOT NULL, `verdict` TEXT NOT NULL, `confirmed` INTEGER NOT NULL, `currentJson` TEXT NOT NULL, `phase` TEXT NOT NULL, `phaseSince` INTEGER NOT NULL, `heartbeatAt` INTEGER NOT NULL, `liveTokens` INTEGER NOT NULL, `liveTokS` REAL NOT NULL, `liveTarget` INTEGER NOT NULL, `phaseTotalMs` INTEGER NOT NULL)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "modelPath",
+            "columnName": "modelPath",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "startedAt",
+            "columnName": "startedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "finishedAt",
+            "columnName": "finishedAt",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "status",
+            "columnName": "status",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "includeLossy",
+            "columnName": "includeLossy",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "includeSustained",
+            "columnName": "includeSustained",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sustainedMinutes",
+            "columnName": "sustainedMinutes",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "referenceHeadroom",
+            "columnName": "referenceHeadroom",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "referenceThermal",
+            "columnName": "referenceThermal",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "referenceBatteryC",
+            "columnName": "referenceBatteryC",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "referenceMemAvailMb",
+            "columnName": "referenceMemAvailMb",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "startedWarm",
+            "columnName": "startedWarm",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "stage",
+            "columnName": "stage",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "detail",
+            "columnName": "detail",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "note",
+            "columnName": "note",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "recommendedJson",
+            "columnName": "recommendedJson",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "recommendedLabel",
+            "columnName": "recommendedLabel",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "verdict",
+            "columnName": "verdict",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "confirmed",
+            "columnName": "confirmed",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "currentJson",
+            "columnName": "currentJson",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "phase",
+            "columnName": "phase",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "phaseSince",
+            "columnName": "phaseSince",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "heartbeatAt",
+            "columnName": "heartbeatAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "liveTokens",
+            "columnName": "liveTokens",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "liveTokS",
+            "columnName": "liveTokS",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "liveTarget",
+            "columnName": "liveTarget",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "phaseTotalMs",
+            "columnName": "phaseTotalMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "scan_cells",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `runId` INTEGER NOT NULL, `stage` TEXT NOT NULL, `kind` TEXT NOT NULL, `label` TEXT NOT NULL, `settingsJson` TEXT NOT NULL, `argvSig` TEXT NOT NULL, `status` TEXT NOT NULL, `attempt` INTEGER NOT NULL, `lossy` INTEGER NOT NULL, `startedAt` INTEGER NOT NULL, `finishedAt` INTEGER, `error` TEXT, `nExpertUsed` INTEGER NOT NULL, `loadS` REAL NOT NULL, `prefillS` REAL NOT NULL, `prefillTps` REAL NOT NULL, `nPrompt` INTEGER NOT NULL, `tokens` INTEGER NOT NULL, `tokS` REAL NOT NULL, `effTokS` REAL NOT NULL, `cacheHitPct` REAL NOT NULL, `readMib` REAL NOT NULL, `majfltPerTok` REAL NOT NULL, `cpuSPerTok` REAL NOT NULL, `cacheResidentMib` REAL NOT NULL, `decodeMedianTokS` REAL NOT NULL, `coolMedianTokS` REAL NOT NULL, `sustainedTokS` REAL NOT NULL, `firstMinuteTokS` REAL NOT NULL, `timeToThrottleS` REAL NOT NULL, `throttledFrac` REAL NOT NULL, `maxThermalStatus` INTEGER NOT NULL, `headroomStart` REAL NOT NULL, `headroomEnd` REAL NOT NULL, `minCpu6MaxKHz` INTEGER NOT NULL, `peakAnonMb` INTEGER NOT NULL, `cpuset` TEXT NOT NULL, `cpusAllowed` INTEGER NOT NULL, `ioMode` TEXT NOT NULL, `charging` INTEGER NOT NULL, `screenOn` INTEGER NOT NULL, `gateWaitS` REAL NOT NULL, `gateGaveUp` INTEGER NOT NULL, `gateNote` TEXT NOT NULL, `outputText` TEXT NOT NULL, `tokenMsJson` TEXT NOT NULL, `tokenAtJson` TEXT NOT NULL, `samplesJson` TEXT NOT NULL, FOREIGN KEY(`runId`) REFERENCES `scan_runs`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "runId",
+            "columnName": "runId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "stage",
+            "columnName": "stage",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "kind",
+            "columnName": "kind",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "label",
+            "columnName": "label",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "settingsJson",
+            "columnName": "settingsJson",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "argvSig",
+            "columnName": "argvSig",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "status",
+            "columnName": "status",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "attempt",
+            "columnName": "attempt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lossy",
+            "columnName": "lossy",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "startedAt",
+            "columnName": "startedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "finishedAt",
+            "columnName": "finishedAt",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "error",
+            "columnName": "error",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "nExpertUsed",
+            "columnName": "nExpertUsed",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "loadS",
+            "columnName": "loadS",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "prefillS",
+            "columnName": "prefillS",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "prefillTps",
+            "columnName": "prefillTps",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "nPrompt",
+            "columnName": "nPrompt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "tokens",
+            "columnName": "tokens",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "tokS",
+            "columnName": "tokS",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "effTokS",
+            "columnName": "effTokS",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "cacheHitPct",
+            "columnName": "cacheHitPct",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "readMib",
+            "columnName": "readMib",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "majfltPerTok",
+            "columnName": "majfltPerTok",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "cpuSPerTok",
+            "columnName": "cpuSPerTok",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "cacheResidentMib",
+            "columnName": "cacheResidentMib",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "decodeMedianTokS",
+            "columnName": "decodeMedianTokS",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "coolMedianTokS",
+            "columnName": "coolMedianTokS",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sustainedTokS",
+            "columnName": "sustainedTokS",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "firstMinuteTokS",
+            "columnName": "firstMinuteTokS",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "timeToThrottleS",
+            "columnName": "timeToThrottleS",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "throttledFrac",
+            "columnName": "throttledFrac",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "maxThermalStatus",
+            "columnName": "maxThermalStatus",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "headroomStart",
+            "columnName": "headroomStart",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "headroomEnd",
+            "columnName": "headroomEnd",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "minCpu6MaxKHz",
+            "columnName": "minCpu6MaxKHz",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "peakAnonMb",
+            "columnName": "peakAnonMb",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "cpuset",
+            "columnName": "cpuset",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "cpusAllowed",
+            "columnName": "cpusAllowed",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "ioMode",
+            "columnName": "ioMode",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "charging",
+            "columnName": "charging",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "screenOn",
+            "columnName": "screenOn",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "gateWaitS",
+            "columnName": "gateWaitS",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "gateGaveUp",
+            "columnName": "gateGaveUp",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "gateNote",
+            "columnName": "gateNote",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "outputText",
+            "columnName": "outputText",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "tokenMsJson",
+            "columnName": "tokenMsJson",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "tokenAtJson",
+            "columnName": "tokenAtJson",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "samplesJson",
+            "columnName": "samplesJson",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_scan_cells_runId",
+            "unique": false,
+            "columnNames": [
+              "runId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_scan_cells_runId` ON `${TABLE_NAME}` (`runId`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "scan_runs",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "runId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "model_profiles",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`modelPath` TEXT NOT NULL, `settingsJson` TEXT NOT NULL, `source` TEXT NOT NULL, `runId` INTEGER, `createdAt` INTEGER NOT NULL, PRIMARY KEY(`modelPath`))",
+        "fields": [
+          {
+            "fieldPath": "modelPath",
+            "columnName": "modelPath",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "settingsJson",
+            "columnName": "settingsJson",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "source",
+            "columnName": "source",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "runId",
+            "columnName": "runId",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "createdAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "modelPath"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": []
+      }
+    ],
+    "views": [],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'd9fab1023c523d464ca1cb05eda1b995')"
+    ]
+  }
+}

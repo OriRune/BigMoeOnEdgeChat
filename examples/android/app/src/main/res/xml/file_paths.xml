@@ -6,4 +6,8 @@
     <external-files-path
         name="metrics"
         path="metrics/" />
+    <!-- Chats exported as Markdown, written to the cache just before the share sheet opens. -->
+    <cache-path
+        name="exports"
+        path="exports/" />
 </paths>

@@ -50,7 +50,8 @@ r = session([gen(1, "what did I say?", history_roles=["user", "assistant"], hist
 check("seeded history completes", len(r) == 1 and r[0][0] == "BMOE_DONE", str(r))
 if r and r[0][0] == "BMOE_DONE":
     check("BMOE_DONE carries history_dropped=0", r[0][2].get("history_dropped") == 0)
-    check("history_dropped is the last key", r[0][1].rstrip("}").rsplit(",", 1)[-1] == '"history_dropped":0')
+    check("thinking_tokens is the last key", r[0][1].rstrip("}").rsplit(",", 1)[-1] == '"thinking_tokens":0')
+    check("history_dropped precedes the thinking keys", '"history_dropped":0,"thinking_cut":false,' in r[0][1])
 
 # Bad requests are recoverable; the request after each one succeeds.
 r = session([
@@ -92,5 +93,18 @@ r = session([
 check("oversized history: refused without fit_ctx, trimmed with it",
       len(r) == 2 and r[0][0] == "BMOE_ERROR" and r[0][2]["fatal"] is False and r[1][0] == "BMOE_DONE"
       and r[1][2]["history_dropped"] > 0 and r[1][2]["history_dropped"] % 2 == 0, str(r))
+
+# Thinking budget. The fixture's template declares no reasoning span, so nothing can be cut here (the
+# cut itself is covered against real templates by think_budget_test); what is pinned is the wire
+# format: the budget and the end_thinking command are accepted and a turn that never thinks reports
+# thinking_cut=false, and end_thinking with nothing to end does not disturb the session.
+r = session([
+    gen(1, "hi", think=True, think_budget=4),
+    {"cmd": "end_thinking"},
+    gen(2, "hi", think=True),
+])
+check("think_budget and end_thinking are accepted; no span means no cut",
+      len(r) == 2 and all(k == "BMOE_DONE" for k, _, _ in r)
+      and all(j["thinking_cut"] is False and j["thinking_tokens"] == 0 for _, _, j in r), str(r))
 
 sys.exit(1 if failures else 0)

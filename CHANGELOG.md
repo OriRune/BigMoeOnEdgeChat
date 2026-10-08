@@ -4,6 +4,27 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 Semantic Versioning.
 
+## [0.28.2] - 2026-10-06
+
+### Added
+- **A budget for the reasoning span.** A thinking model can spend a whole reply budget inside its
+  reasoning and never answer, and the common templates (Qwen3.x, Gemma 4) offer no effort levels to ask
+  for less. `GenerateRequest::think_budget` limits the tokens inside the span: when it has run that
+  long the engine forces the span's closing tag and the model answers from there. `Session::end_thinking()`
+  makes the same cut on demand (thread-safe, like `cancel()`). The markers are read from the rendered
+  chat template, never named, and a model whose template declares no span is untouched. With no budget
+  and no request the generation loop is unchanged. `RunResult` gains `thinking_cut` and
+  `thinking_tokens`. On the line protocol: `generate` takes `think_budget`, a new `end_thinking`
+  command sits beside `cancel`, and `BMOE_DONE` ends with `thinking_cut` and `thinking_tokens`. See
+  `docs/telemetry.md`.
+
+### Fixed
+- **A reply whose reasoning span is closed more than once showed nothing.** A pruned Gemma 4 writes
+  the closing tag three times after an empty span, and the chat parser then returned neither
+  reasoning nor answer for the whole turn, however long it was. The text handed to the parser now
+  keeps the first closer and drops the ones that follow it directly; generation, the KV cache and the
+  history the model sees are untouched.
+
 ## [0.28.1] - 2026-10-04
 
 ### Added

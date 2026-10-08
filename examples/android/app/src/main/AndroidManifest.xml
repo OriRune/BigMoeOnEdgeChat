@@ -4,6 +4,7 @@
 
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <!-- Fetching a model is the only thing this app does over the network: the in-app download
@@ -38,9 +39,11 @@
              devices without it, and the NPU prefill then fails to find its device. -->
         <uses-native-library android:name="libcdsprpc.so" android:required="false" />
 
+        <!-- The front door: saved chats. A reply notification opens it with a conversationId extra. -->
         <activity
-            android:name=".MainActivity"
+            android:name=".chat.ui.ChatActivity"
             android:exported="true"
+            android:launchMode="singleTask"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -48,10 +51,40 @@
             </intent-filter>
         </activity>
 
+        <!-- The original single-screen app, kept as the engine lab: every engine setting, the metrics
+             and the model downloader. Opened from the chat's menu. -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:label="Engine lab"
+            android:windowSoftInputMode="adjustResize" />
+
         <service
             android:name=".RunService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+        <!-- The chat's engine lives in its own process: the bmoe-cli child then gets its own memory
+             cgroup instead of sharing the UI's, which is what throttled the UI thread into "not
+             responding" when the model filled memory (CHAT.md). -->
+        <service
+            android:name=".chat.engine.EngineService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse"
+            android:process=":engine">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="On-device LLM inference that continues while the screen is off" />
+        </service>
+        <!-- Foreground mode: the same engine, in the main process, for the models that trade background
+             replies for a larger memory budget (CHAT.md). -->
+        <service
+            android:name=".chat.engine.ForegroundEngineService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="On-device LLM inference while the app is open" />
+        </service>
         <!-- WorkManager runs DownloadWorker's foreground transfer through its own
              SystemForegroundService, which it declares without a foregroundServiceType. On API 34+
              the type passed to startForeground (dataSync) must be a subset of the type on the

@@ -1,0 +1,581 @@
+package io.bigmoeonedge.example.chat.engine
+
+import io.bigmoeonedge.example.chat.ThinkLevel
+import io.bigmoeonedge.example.chat.data.ChatDb
+import io.bigmoeonedge.example.chat.data.ConversationEntity
+import io.bigmoeonedge.example.chat.data.EngineStateName
+import io.bigmoeonedge.example.chat.data.EngineStatusEntity
+import io.bigmoeonedge.example.chat.data.HistoryBuilder
+import io.bigmoeonedge.example.chat.data.JobHistory
+import io.bigmoeonedge.example.chat.data.MessageEntity
+import io.bigmoeonedge.example.chat.data.MessageStatus
+import io.bigmoeonedge.example.chat.data.QueueRules
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import java.io.File
+import java.util.concurrent.Executors
+
+/** How to open the session for one conversation's model, resolved when the job starts. */
+data class JobConfig(
+    val argv: List<String>,
+    val sig: String,
+    val env: Map<String, String>,
+    val workDir: File?,
+    val nPredict: Int,
+    val ctx: Int,
+    val fake: Boolean,
+    val modelName: String,
+)
+
+/** What the runner needs from Android. The service implements it; tests use a stub. */
+interface EngineHost {
+    suspend fun jobConfig(conv: ConversationEntity): JobConfig
+    fun createBackend(cfg: JobConfig): EngineBackend
+
+    /** Make sure no other engine child (the lab screen's, an orphan) holds the model's memory. */
+    suspend fun clearOtherEngines(selfPid: Int)
+
+    /** The foreground notification text. */
+    fun foregroundText(text: String)
+
+    /** Keep the CPU awake while the queue is being worked. */
+    fun holdWake(on: Boolean)
+
+    /** Why queued work must not start now ("Paused, low battery"), or null. */
+    fun pauseReason(): String?
+
+    fun thermalStatus(): Int
+    fun keepLoadedMinutes(): Int
+
+    /** Anonymous memory (RAM + swap) the engine child holds, in MiB, or -1 when it cannot be read. */
+    fun childMemoryMb(pid: Int): Int = -1
+
+    // ── the scan (settings search); defaults keep chat-only stubs small ──
+
+    /** Whether the fake engine is selected (debug builds only). */
+    fun isFake(): Boolean = false
+
+    /** The device readings for the scan: the real phone, or the simulated one with the fake engine. */
+    fun deviceSampler(): io.bigmoeonedge.example.scan.DeviceSampler = io.bigmoeonedge.example.scan.FakeSampler()
+
+    /** The settings a chat would use for [modelPath] today, ignoring any saved profile. */
+    suspend fun scanCurrentSettings(modelPath: String): io.bigmoeonedge.example.AppSettings =
+        io.bigmoeonedge.example.AppSettings()
+
+    /** How to open a session for [settings]; [csv] is where the engine writes its per-token CSV. */
+    fun scanJobConfig(modelPath: String, settings: io.bigmoeonedge.example.AppSettings, csv: File?): JobConfig =
+        JobConfig(listOf("fake"), "sig", emptyMap(), null, 128, settings.sessionCtx, true, "fake")
+
+    /** Where a scan cell's per-token CSV goes, or null. */
+    fun scanCsv(runId: Long, cellId: Long): File? = null
+
+    fun scanTiming(): io.bigmoeonedge.example.scan.ScanTiming = io.bigmoeonedge.example.scan.ScanTiming()
+
+    fun scanPrompt(): String = "Continue the story:"
+    fun ramBytes(): Long = 12L shl 30
+
+    /** The cpuset name and the number of cores the child may run on. */
+    fun cpusetOf(pid: Int): Pair<String, Int> = "" to 0
+
+    /** A scan reached a final state: notify the user. */
+    fun scanFinished(run: io.bigmoeonedge.example.chat.data.ScanRunEntity) {}
+
+    /** Low battery pause for the scan (stricter than the chat's): below 20% and not charging. */
+    fun scanPauseReason(): String? = null
+
+    // ── foreground mode: two hosts (the :engine process and the main-process service) share one queue ──
+
+    /**
+     * Whether this host serves [modelPath]. The :engine process serves the models that are not set to
+     * foreground mode, the main-process service the ones that are; each leaves the other's replies queued.
+     */
+    fun handles(modelPath: String): Boolean = true
+
+    /** The host that owns the engine status row while idle. A second host writes it only while it is engaged. */
+    val primary: Boolean get() = true
+
+    /**
+     * One engine at a time across processes: both hosts would otherwise kill each other's child when they
+     * load. Returns a token to close when the job ends, or null when the other process holds the engine.
+     */
+    fun tryEngineSlot(): AutoCloseable? = AutoCloseable {}
+
+    /** A reply reached a final status. [status] is DONE, FAILED or CANCELLED. */
+    suspend fun replyFinished(messageId: Long, conversationId: Long, status: String)
+
+    /** The queue drained; [modelLoaded] says whether a session is still open. */
+    fun idle(modelLoaded: Boolean)
+}
+
+/**
+ * The job loop. One coroutine on a single thread: pick the oldest queued reply across all
+ * conversations, make sure the right session is open, seed it with the stored conversation, stream
+ * the answer into the database, repeat. It is the only writer of reply progress.
+ */
+class EngineRunner(
+    private val db: ChatDb,
+    private val host: EngineHost,
+    private val clock: () -> Long = System::currentTimeMillis,
+) {
+    private val executor = Executors.newSingleThreadExecutor { Thread(it, "bmoe-engine-jobs") }
+    private val scope = CoroutineScope(executor.asCoroutineDispatcher() + SupervisorJob())
+    private val kicks = Channel<Unit>(Channel.CONFLATED)
+
+    private var live: EngineSession? = null
+    private var idleJob: Job? = null
+    private var retryJob: Job? = null
+
+    private val scanExecutor = io.bigmoeonedge.example.scan.ScanExecutor(
+        db, host, host.scanTiming(), clock,
+    ) { st, detail -> status(st, detail) }
+    @Volatile private var scanning = false
+
+    @Volatile private var suspended = false
+    @Volatile private var frozen = false
+    private var freezeJob: Job? = null
+    @Volatile private var activeId = -1L
+    @Volatile private var requeueActive = false
+    @Volatile private var cancelRequested = false
+
+    fun start() {
+        scope.launch {
+            recover()
+            for (k in kicks) drain()
+        }
+        kick()
+    }
+
+    fun kick() {
+        kicks.trySend(Unit)
+    }
+
+    fun shutdown() {
+        kicks.close()
+        scope.launch { teardown() }.invokeOnCompletion { scope.coroutineContext[Job]?.cancel() }
+    }
+
+    /** Stop the reply [messageId] if it is the one running. A queued one is stopped in the database. */
+    fun cancel(messageId: Long) {
+        if (activeId == messageId) {
+            cancelRequested = true
+            live?.backend?.send(EngineProtocol.CANCEL)
+        } else scope.launch {
+            val m = db.messages().get(messageId)
+            if (m?.status == MessageStatus.QUEUED) db.messages().setStatus(messageId, MessageStatus.CANCELLED)
+        }
+    }
+
+    /** End the thinking of the reply [messageId] if it is the one running, and let the model answer. */
+    fun endThinking(messageId: Long) {
+        if (activeId == messageId) live?.backend?.send(EngineProtocol.END_THINKING)
+    }
+
+    /** Stop a running scan; its finished cells are kept and it can be resumed. */
+    fun stopScan() {
+        scanExecutor.stop()
+    }
+
+    /** Stop whatever reply or scan is running (the notification's Stop button). */
+    fun cancelActive() {
+        if (scanning) return stopScan()
+        val id = activeId
+        if (id >= 0) cancel(id)
+    }
+
+    /** Unload the model now (and stop a running reply first). */
+    fun unload() {
+        scope.launch { if (activeId < 0) teardown().also { status(EngineStateName.IDLE, "") } }
+    }
+
+    /** The lab screen wants the engine: give the memory back and hold the queue until [resume]. */
+    fun suspend() {
+        suspended = true
+        if (scanning) stopScan()
+        if (activeId >= 0) {
+            requeueActive = true
+            live?.backend?.send(EngineProtocol.CANCEL)
+        }
+        kick()
+    }
+
+    fun resume() {
+        suspended = false
+        kick()
+    }
+
+    /**
+     * Foreground mode, the app left the front ([on]) or came back. A running reply is frozen in place (its
+     * memory and progress stay) and thawed on return; a loaded idle model is unloaded, since the main
+     * process no longer has the memory to keep it. A reply frozen for too long is put back in the queue,
+     * so a forgotten phone does not hold the model's memory for good.
+     */
+    fun freeze(on: Boolean) {
+        if (on && activeId < 0 && !scanning) {
+            unload()
+            return
+        }
+        frozen = on
+        freezeJob?.cancel()
+        live?.backend?.freeze(on)
+        scope.launch {
+            if (activeId >= 0) {
+                status(EngineStateName.BUSY, "", activeId = activeId, paused = if (on) PAUSED_OUT_OF_APP else null)
+            }
+        }
+        if (on) {
+            freezeJob = scope.launch {
+                delay(FREEZE_LIMIT_MS)
+                if (frozen && activeId >= 0) {
+                    requeueActive = true
+                    live?.backend?.freeze(false)
+                    live?.backend?.send(EngineProtocol.CANCEL)
+                }
+            }
+        } else kick()
+    }
+
+    // ── recovery ──
+
+    /** Messages a dead engine process left PREFILLING or GENERATING get one more try, then fail. */
+    internal suspend fun recover() {
+        for (m in db.messages().active()) {
+            if (!serves(m)) continue
+            val r = QueueRules.recover(m)
+            if (r.status == MessageStatus.QUEUED) db.messages().requeue(m.id, r.attempt, m.queuedAt)
+            else db.messages().setStatus(m.id, MessageStatus.FAILED, r.error)
+        }
+        status(EngineStateName.IDLE, "")
+    }
+
+    // ── queue ──
+
+    private suspend fun drain() {
+        idleJob?.cancel()
+        retryJob?.cancel()
+        var ran = false
+        while (true) {
+            val scanRun = if (suspended) null else db.scan().runningRun()
+            if (scanRun != null) {
+                // One engine owner: the chat queue waits (messages still queue) while a scan runs.
+                val slot = host.tryEngineSlot()
+                if (slot == null) {
+                    retryJob = scope.launch { delay(SLOT_RETRY_MS); kick() }
+                    break
+                }
+                teardown()
+                host.holdWake(true)
+                ran = true
+                scanning = true
+                try {
+                    scanExecutor.run(scanRun)
+                } finally {
+                    scanning = false
+                    slot.close()
+                }
+                // A run that returned still marked RUNNING would loop here forever.
+                db.scan().run(scanRun.id)?.takeIf { it.status == io.bigmoeonedge.example.chat.data.ScanRunStatus.RUNNING }
+                    ?.let { db.scan().updateRun(it.copy(status = io.bigmoeonedge.example.chat.data.ScanRunStatus.FAILED, verdict = "The scan ended unexpectedly.")) }
+                continue
+            }
+            if (suspended) {
+                teardown()
+                status(EngineStateName.IDLE, "", paused = "Engine lab is open")
+                break
+            }
+            val next = pickMine() ?: break
+            val pause = host.pauseReason()
+            if (pause != null) {
+                status(EngineStateName.IDLE, pause, paused = pause)
+                host.foregroundText(pause)
+                if (ran) host.holdWake(false)
+                // The battery receiver kicks on charging; this covers a missed broadcast.
+                retryJob = scope.launch { delay(PAUSE_RETRY_MS); kick() }
+                host.idle(live != null)
+                return
+            }
+            val slot = host.tryEngineSlot()
+            if (slot == null) {
+                // The other process is working; its status row is the truth, so say nothing here.
+                retryJob = scope.launch { delay(SLOT_RETRY_MS); kick() }
+                if (ran) host.holdWake(false)
+                host.idle(live != null)
+                return
+            }
+            if (!ran) {
+                host.holdWake(true)
+                ran = true
+            }
+            try {
+                runJob(next)
+            } finally {
+                slot.close()
+            }
+        }
+        if (ran) host.holdWake(false)
+        afterQueue(ran)
+    }
+
+    private suspend fun afterQueue(ran: Boolean) {
+        if (suspended) {
+            host.idle(false)
+            return
+        }
+        val l = live
+        if (l == null) {
+            // Nothing ran and nothing is loaded: the other host may be mid-reply, and its row is the truth.
+            if (ran) status(EngineStateName.IDLE, "")
+            host.idle(false)
+            return
+        }
+        val mb = host.childMemoryMb(l.backend.pid)
+        val ram = if (mb > 0) String.format(java.util.Locale.US, " · %.1f GB in memory", mb / 1024.0) else ""
+        status(EngineStateName.READY, "Model loaded · idle$ram")
+        host.foregroundText("Model loaded · idle$ram")
+        host.idle(true)
+        when (val minutes = host.keepLoadedMinutes()) {
+            -1 -> {}
+            0 -> unloadNow()
+            else -> idleJob = scope.launch {
+                delay(minutes * 60_000L)
+                unloadNow()
+            }
+        }
+    }
+
+    private suspend fun unloadNow() {
+        teardown()
+        status(EngineStateName.IDLE, "")
+        host.idle(false)
+    }
+
+    /** The oldest queued reply this host serves. */
+    private suspend fun pickMine(): MessageEntity? =
+        QueueRules.pickNext(db.messages().queued().filter { serves(it) })
+
+    private suspend fun serves(m: MessageEntity): Boolean {
+        val conv = db.conversations().get(m.conversationId) ?: return host.primary // an orphan: one host deletes it
+        return host.handles(conv.modelPath)
+    }
+
+    // ── one reply ──
+
+    private suspend fun runJob(m: MessageEntity) {
+        val msgs = db.messages()
+        val conv = db.conversations().get(m.conversationId)
+        if (conv == null) {
+            msgs.delete(m.id)
+            return
+        }
+        val job = HistoryBuilder.build(conv.systemPrompt, msgs.listFor(conv.id), m.id)
+        if (job == null) {
+            msgs.finish(m.id, "", "", MessageStatus.FAILED, "There is no message to answer.", 0, 0.0, 0.0, "", clock())
+            host.replyFinished(m.id, conv.id, MessageStatus.FAILED)
+            return
+        }
+        activeId = m.id
+        requeueActive = false
+        cancelRequested = false
+        var cfg: JobConfig? = null
+        try {
+            cfg = host.jobConfig(conv)
+            msgs.setStatus(m.id, MessageStatus.PREFILLING)
+            val l = ensureSession(cfg, conv.modelPath, m)
+            if (cancelRequested || requeueActive) {
+                // Stopped while the model was loading: nothing was generated yet.
+                if (requeueActive) msgs.requeue(m.id, m.attempt, m.queuedAt)
+                else {
+                    msgs.finish(m.id, "", "", MessageStatus.CANCELLED, null, 0, 0.0, 0.0, "", clock())
+                    host.replyFinished(m.id, conv.id, MessageStatus.CANCELLED)
+                }
+                return
+            }
+            status(EngineStateName.BUSY, "Reading the conversation…", activeId = m.id)
+            host.foregroundText("Reading the conversation…")
+            val id = l.nextId++
+            val turn = EngineConfig.turnBudget(cfg.nPredict, cfg.ctx, conv.thinking, ThinkLevel.of(conv.thinkLevel))
+            val req = EngineProtocol.generate(
+                id = id, prompt = job.prompt, nPredict = turn.nPredict, think = conv.thinking, clearKv = false,
+                history = job.history, fitCtx = true, thinkBudget = turn.thinkBudget,
+            )
+            if (!l.backend.send(req)) throw SessionFailed("The engine is not running.")
+            stream(l, m, conv, cfg, job)
+        } catch (e: SessionFailed) {
+            fail(m, conv, e.message ?: "The engine failed.")
+            teardown()
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            fail(m, conv, e.message ?: e.toString())
+            teardown()
+        } finally {
+            activeId = -1L
+        }
+    }
+
+    private suspend fun fail(m: MessageEntity, conv: ConversationEntity, msg: String) {
+        val cur = db.messages().get(m.id)
+        db.messages().finish(
+            m.id, cur?.text ?: "", cur?.reasoning ?: "", MessageStatus.FAILED, msg, cur?.tokens ?: 0,
+            cur?.tokPerSec ?: 0.0, 0.0, "", clock(),
+        )
+        status(EngineStateName.ERROR, msg, error = msg)
+        host.replyFinished(m.id, conv.id, MessageStatus.FAILED)
+    }
+
+    private suspend fun stream(l: EngineSession, m: MessageEntity, conv: ConversationEntity, cfg: JobConfig, job: JobHistory) {
+        val msgs = db.messages()
+        var lastFlush = 0L
+        var firstTokenAt = 0L
+        var deleted = false
+        while (true) {
+            when (val ev = l.events.receive()) {
+                is EngineSession.Ev.Exit -> {
+                    live = null
+                    l.exited = true
+                    val tail = l.tail()
+                    throw SessionFailed(
+                        "The engine stopped unexpectedly (exit ${ev.code})." + if (tail.isEmpty()) "" else "\n$tail",
+                    )
+                }
+                is EngineSession.Ev.Line -> when (val p = l.protocol.parse(ev.text)) {
+                    is EngineEvent.Progress -> {
+                        val now = clock()
+                        if (firstTokenAt == 0L) {
+                            firstTokenAt = now
+                            msgs.setStatus(m.id, MessageStatus.GENERATING)
+                            status(EngineStateName.BUSY, "Writing reply", activeId = m.id)
+                        }
+                        if (now - lastFlush >= FLUSH_MS) {
+                            lastFlush = now
+                            val t = p.telemetry
+                            val secs = (now - firstTokenAt) / 1000.0
+                            val rate = if (secs > 0.5) t.step / secs else t.tokensPerSecond
+                            if (!deleted && msgs.updateProgress(m.id, t.text, t.reasoning, MessageStatus.GENERATING, t.step, rate) == 0) {
+                                // The row is gone (an edit deleted it): stop writing for nothing.
+                                deleted = true
+                                l.backend.send(EngineProtocol.CANCEL)
+                            }
+                            status(EngineStateName.BUSY, "Writing reply", activeId = m.id, step = t.step, tokPerSec = rate)
+                            host.foregroundText(
+                                String.format(java.util.Locale.US, "Writing reply · %d tok · %.1f tok/s", t.step, rate),
+                            )
+                        }
+                    }
+                    is EngineEvent.Done -> {
+                        val info = p.info
+                        if (requeueActive && info.cancelled) {
+                            msgs.requeue(m.id, m.attempt, m.queuedAt)
+                            return
+                        }
+                        val st = if (info.cancelled) MessageStatus.CANCELLED else MessageStatus.DONE
+                        msgs.finish(
+                            m.id, info.text, info.reasoning, st, null, info.tokens, info.tokS, info.prefillS,
+                            info.metricsLine(cfg.ctx), clock(),
+                        )
+                        if (info.thinkingCut) msgs.setThinkingInfo(m.id, true, info.thinkingTokens)
+                        if (st == MessageStatus.DONE) {
+                            msgs.replaceOutOfContext(conv.id, HistoryBuilder.droppedRows(job, info.historyDropped))
+                        }
+                        status(EngineStateName.READY, "", tokPerSec = info.tokS)
+                        if (!deleted) host.replyFinished(m.id, conv.id, st)
+                        return
+                    }
+                    is EngineEvent.Error -> {
+                        if (p.fatal) throw SessionFailed(p.msg)
+                        // A rejected request (context overflow, bad history): the session stays usable.
+                        val cur = msgs.get(m.id)
+                        msgs.finish(
+                            m.id, cur?.text ?: "", cur?.reasoning ?: "", MessageStatus.FAILED, p.msg,
+                            cur?.tokens ?: 0, cur?.tokPerSec ?: 0.0, 0.0, "", clock(),
+                        )
+                        status(EngineStateName.READY, "", error = p.msg)
+                        host.replyFinished(m.id, conv.id, MessageStatus.FAILED)
+                        return
+                    }
+                    else -> {}
+                }
+            }
+        }
+    }
+
+    // ── session lifecycle ──
+
+    private suspend fun ensureSession(cfg: JobConfig, modelPath: String, m: MessageEntity): EngineSession {
+        val cur = live
+        if (cur != null && cur.sig == cfg.sig && cur.backend.isAlive) return cur
+        if (cur != null) teardown()
+        status(EngineStateName.LOADING, "Loading ${cfg.modelName}…", activeId = m.id)
+        host.foregroundText("Loading ${cfg.modelName}…")
+        if (!cfg.fake) withContext(Dispatchers.IO) { host.clearOtherEngines(-1) }
+
+        val l = EngineSession(host.createBackend(cfg), cfg.sig, modelPath)
+        live = l
+        l.start(cfg)
+        try {
+            l.awaitReady()
+        } catch (e: SessionFailed) {
+            live = null
+            throw e
+        }
+        status(EngineStateName.READY, "", ioMode = l.ioMode)
+        return l
+    }
+
+    /** Close the chat session and wait for its process to go. */
+    private suspend fun teardown() {
+        val l = live ?: return
+        live = null
+        l.close(EXIT_GRACE_MS, EXIT_FORCE_MS)
+    }
+
+    // ── status row ──
+
+    private var lastIo = ""
+    private var wroteBusy = false
+
+    private suspend fun status(
+        state: EngineStateName, detail: String, activeId: Long? = null, step: Int = 0, tokPerSec: Double = 0.0,
+        error: String? = null, paused: String? = null, ioMode: String? = null,
+    ) {
+        if (ioMode != null && ioMode.isNotEmpty()) lastIo = ioMode
+        val l = live
+        // A secondary host writes the row only while it has something of its own to report (and once more
+        // when it lets go), so an idle one never overwrites the other host's progress.
+        if (!host.primary && l == null && !scanning && !wroteBusy) return
+        wroteBusy = state != EngineStateName.IDLE
+        db.engineStatus().put(
+            EngineStatusEntity(
+                state = state.name,
+                modelPath = l?.modelPath ?: "",
+                sessionSig = l?.sig ?: "",
+                activeMessageId = activeId,
+                step = step,
+                tokPerSec = tokPerSec,
+                thermalStatus = host.thermalStatus(),
+                ioMode = if (l != null) lastIo else "",
+                lastError = error,
+                pausedReason = paused,
+                detail = detail,
+                updatedAt = clock(),
+            ),
+        )
+    }
+
+    companion object {
+        const val FLUSH_MS = 500L
+        const val EXIT_GRACE_MS = 3000L
+        const val EXIT_FORCE_MS = 3000L
+        const val PAUSE_RETRY_MS = 120_000L
+        const val SLOT_RETRY_MS = 2_000L
+        const val FREEZE_LIMIT_MS = 30 * 60_000L
+        const val PAUSED_OUT_OF_APP = "Paused, return to the app to continue"
+    }
+}
