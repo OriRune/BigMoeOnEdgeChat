@@ -28,6 +28,12 @@ changes offered back upstream go there instead, per `AGENTS.md`.
 - `ScanPlanner.next` is now the first unmeasured cell of `ScanPlanner.plan`, which also describes the
   rest of the scan; the planner's behaviour is unchanged (its tests are).
 
+### Fixed
+- A foreground-mode model could fail to load with *exit 137* right after the phone restarted. The two
+  engine services shared one pid file, and the `:engine` process, starting a moment after the main
+  process, took the foreground service's new child for the orphan of a dead process and killed it. Each
+  service now keeps its own pid file.
+
 ## [0.28.0-chat.8] - 2026-10-06
 
 ### Added

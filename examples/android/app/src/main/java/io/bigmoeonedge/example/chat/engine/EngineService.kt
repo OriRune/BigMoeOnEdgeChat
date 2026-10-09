@@ -55,6 +55,12 @@ open class EngineService : Service(), EngineHost {
     /** True in the main-process subclass: it serves the models set to foreground mode, only while the app is in front. */
     protected open val foregroundMode: Boolean = false
 
+    /**
+     * One pid file per service. The two services start together, and a file they shared let the
+     * newer one take the other's child for an orphan of a dead process and kill it at once.
+     */
+    private val pidFile: File get() = File(filesDir, if (foregroundMode) "engine-fg.pid" else "engine.pid")
+
     // Two services of one app: the same id would make one's notification replace and remove the other's.
     private val notifId: Int get() = if (foregroundMode) NOTIF_ID_FOREGROUND else NOTIF_ID
 
@@ -89,7 +95,7 @@ open class EngineService : Service(), EngineHost {
         super.onCreate()
         ensureChannel()
         // A previous engine process may have died with its child still alive.
-        ProcessEngineBackend.killOrphan(File(filesDir, "engine.pid"))
+        ProcessEngineBackend.killOrphan(pidFile)
         val db = ChatDb.get(this)
         notifier = ReplyNotifier(this, db).also { it.ensureChannel() }
         runner = EngineRunner(db, this)
@@ -316,7 +322,7 @@ open class EngineService : Service(), EngineHost {
     }
 
     override fun createBackend(cfg: JobConfig): EngineBackend =
-        if (cfg.fake) FakeEngineBackend() else ProcessEngineBackend(File(filesDir, "engine.pid"))
+        if (cfg.fake) FakeEngineBackend() else ProcessEngineBackend(pidFile)
 
     override suspend fun clearOtherEngines(selfPid: Int) {
         var others = ProcessEngineBackend.otherCliPids(selfPid)
